@@ -1,28 +1,30 @@
-import React, { useMemo, useState, useEffect } from 'react';
+import React, { useCallback, useMemo, useState, useEffect } from 'react';
 import {
   Alert,
   FlatList,
   Linking,
   Modal,
   SafeAreaView,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
-import { NavigationContainer } from '@react-navigation/native';
+import { NavigationContainer, useFocusEffect } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 
 // Change this base URL to your Flask server address when testing on device/emulator.
 const API_BASE_URL = 'http://172.16.1.103:5000';
 const Stack = createNativeStackNavigator();
+const FORM_PLACEHOLDER_COLOR = '#334E68';
 
 export default function App() {
   return (
     <NavigationContainer>
       <Stack.Navigator
-        initialRouteName="StudentDirectory"
+        initialRouteName="Home"
         screenOptions={{
           headerStyle: { backgroundColor: '#102A43' },
           headerTintColor: '#FFFFFF',
@@ -30,17 +32,48 @@ export default function App() {
         }}
       >
         <Stack.Screen
+          name="Home"
+          component={HomeScreen}
+          options={{ title: 'School Safety Modules' }}
+        />
+        <Stack.Screen
           name="StudentDirectory"
           component={StudentDirectoryScreen}
-          options={{ title: 'Emergency Info Directory' }}
+          options={{ title: 'Students' }}
         />
         <Stack.Screen
           name="EmergencyProfile"
           component={EmergencyProfileScreen}
           options={{ title: 'Emergency Profile' }}
         />
+        <Stack.Screen
+          name="StudentForm"
+          component={StudentFormScreen}
+          options={({ route }) => ({
+            title: route.params?.mode === 'edit' ? 'Edit Student' : 'Add Student',
+          })}
+        />
       </Stack.Navigator>
     </NavigationContainer>
+  );
+}
+
+function HomeScreen({ navigation }) {
+  return (
+    <SafeAreaView style={styles.container}>
+      <View style={styles.screenContainer}>
+        <Text style={styles.title}>School Safety</Text>
+        <Text style={styles.subtitle}>Select a module</Text>
+
+        <TouchableOpacity
+          style={styles.moduleCard}
+          onPress={() => navigation.navigate('StudentDirectory')}
+        >
+          <Text style={styles.moduleTitle}>Students</Text>
+          <Text style={styles.moduleSubtitle}>Emergency profiles, contacts, and medical info</Text>
+        </TouchableOpacity>
+      </View>
+    </SafeAreaView>
   );
 }
 
@@ -50,27 +83,33 @@ function StudentDirectoryScreen({ navigation }) {
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState('');
 
-  useEffect(() => {
-    const fetchStudents = async () => {
-      try {
-        setLoading(true);
-        setErrorMessage('');
-        const response = await fetch(`${API_BASE_URL}/students`);
-        if (!response.ok) {
-          throw new Error('Unable to load student directory.');
-        }
-
-        const data = await response.json();
-        setStudents(Array.isArray(data) ? data : []);
-      } catch (error) {
-        setErrorMessage(error.message || 'Could not fetch students.');
-      } finally {
-        setLoading(false);
+  const fetchStudents = useCallback(async () => {
+    try {
+      setLoading(true);
+      setErrorMessage('');
+      const response = await fetch(`${API_BASE_URL}/students`);
+      if (!response.ok) {
+        throw new Error('Unable to load student directory.');
       }
-    };
 
-    fetchStudents();
+      const data = await response.json();
+      setStudents(Array.isArray(data) ? data : []);
+    } catch (error) {
+      setErrorMessage(error.message || 'Could not fetch students.');
+    } finally {
+      setLoading(false);
+    }
   }, []);
+
+  useEffect(() => {
+    fetchStudents();
+  }, [fetchStudents]);
+
+  useFocusEffect(
+    useCallback(() => {
+      fetchStudents();
+    }, [fetchStudents]),
+  );
 
   const filteredStudents = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
@@ -102,6 +141,13 @@ function StudentDirectoryScreen({ navigation }) {
         <Text style={styles.title}>Emergency Info</Text>
         <Text style={styles.subtitle}>Student Directory</Text>
 
+        <TouchableOpacity
+          style={styles.addStudentButton}
+          onPress={() => navigation.navigate('StudentForm', { mode: 'add' })}
+        >
+          <Text style={styles.addStudentButtonText}>+ Add Student</Text>
+        </TouchableOpacity>
+
         <TextInput
           style={styles.searchInput}
           placeholder="Search student name"
@@ -123,11 +169,12 @@ function StudentDirectoryScreen({ navigation }) {
   );
 }
 
-function EmergencyProfileScreen({ route }) {
+function EmergencyProfileScreen({ route, navigation }) {
   const { student } = route.params;
   const [isMedicalAidVisible, setIsMedicalAidVisible] = useState(false);
   const [isPinModalVisible, setIsPinModalVisible] = useState(false);
   const [pinInput, setPinInput] = useState('');
+  const emergencyContacts = Array.isArray(student.emergencyContacts) ? student.emergencyContacts : [];
 
   const hasCriticalAllergy = student.allergies && student.allergies.toLowerCase() !== 'none';
 
@@ -175,15 +222,24 @@ function EmergencyProfileScreen({ route }) {
           {student.firstName} {student.lastName}
         </Text>
 
+        <TouchableOpacity
+          style={styles.editStudentButton}
+          onPress={() => navigation.navigate('StudentForm', { mode: 'edit', student })}
+        >
+          <Text style={styles.editStudentButtonText}>Edit Student</Text>
+        </TouchableOpacity>
+
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>Contact Details</Text>
-          {(student.parentContact || []).map((phoneNumber) => (
+          {emergencyContacts.map((contact, index) => (
             <TouchableOpacity
-              key={phoneNumber}
+              key={`${contact.number || 'contact'}-${index}`}
               style={styles.contactButton}
-              onPress={() => handleDial(phoneNumber)}
+              onPress={() => handleDial(contact.number)}
             >
-              <Text style={styles.contactButtonText}>Call Parent: {phoneNumber}</Text>
+              <Text style={styles.contactButtonText}>
+                Call {contact.name || `Emergency Contact ${index + 1}`}: {contact.number}
+              </Text>
             </TouchableOpacity>
           ))}
 
@@ -253,6 +309,206 @@ function EmergencyProfileScreen({ route }) {
   );
 }
 
+function StudentFormScreen({ navigation, route }) {
+  const mode = route.params?.mode || 'add';
+  const initialStudent = route.params?.student;
+  const initialEmergencyContacts = Array.isArray(initialStudent?.emergencyContacts)
+    ? initialStudent.emergencyContacts
+    : [];
+
+  const [firstName, setFirstName] = useState(initialStudent?.firstName || '');
+  const [lastName, setLastName] = useState(initialStudent?.lastName || '');
+  const [emergencyContact1Name, setEmergencyContact1Name] = useState(initialEmergencyContacts[0]?.name || '');
+  const [emergencyContact1Number, setEmergencyContact1Number] = useState(initialEmergencyContacts[0]?.number || '');
+  const [emergencyContact2Name, setEmergencyContact2Name] = useState(initialEmergencyContacts[1]?.name || '');
+  const [emergencyContact2Number, setEmergencyContact2Number] = useState(initialEmergencyContacts[1]?.number || '');
+  const [emergencyContact3Name, setEmergencyContact3Name] = useState(initialEmergencyContacts[2]?.name || '');
+  const [emergencyContact3Number, setEmergencyContact3Number] = useState(initialEmergencyContacts[2]?.number || '');
+  const [allergies, setAllergies] = useState(initialStudent?.allergies || '');
+  const [medicalAidName, setMedicalAidName] = useState(initialStudent?.medicalAidName || '');
+  const [medicalAidNumber, setMedicalAidNumber] = useState(initialStudent?.medicalAidNumber || '');
+  const [doctorContact, setDoctorContact] = useState(initialStudent?.doctorContact || '');
+  const [medicalPin, setMedicalPin] = useState(initialStudent?.medicalPin || '');
+  const [isSaving, setIsSaving] = useState(false);
+
+  const handleSubmit = async () => {
+    if (!firstName.trim() || !lastName.trim()) {
+      Alert.alert('Missing Details', 'First Name and Last Name are required.');
+      return;
+    }
+
+    if (!emergencyContact1Name.trim() || !emergencyContact1Number.trim()) {
+      Alert.alert('Missing Details', 'Emergency Contact 1 Name and Number are required.');
+      return;
+    }
+
+    const emergencyContacts = [
+      { name: emergencyContact1Name.trim(), number: emergencyContact1Number.trim() },
+      { name: emergencyContact2Name.trim(), number: emergencyContact2Number.trim() },
+      { name: emergencyContact3Name.trim(), number: emergencyContact3Number.trim() },
+    ].filter((contact) => contact.name || contact.number);
+
+    const payload = {
+      firstName: firstName.trim(),
+      lastName: lastName.trim(),
+      emergencyContacts,
+      allergies: allergies.trim() || 'No known allergies',
+      medicalAidName: medicalAidName.trim(),
+      medicalAidNumber: medicalAidNumber.trim(),
+      doctorContact: doctorContact.trim(),
+      medicalPin: medicalPin.trim(),
+    };
+
+    const endpoint = mode === 'edit'
+      ? `${API_BASE_URL}/students/${initialStudent.id}`
+      : `${API_BASE_URL}/students`;
+
+    const method = mode === 'edit' ? 'PUT' : 'POST';
+
+    try {
+      setIsSaving(true);
+      const response = await fetch(endpoint, {
+        method,
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        const errorPayload = await response.json().catch(() => ({}));
+        throw new Error(errorPayload.error || 'Could not save student.');
+      }
+
+      Alert.alert('Saved', mode === 'edit' ? 'Student updated.' : 'Student added.');
+      navigation.navigate('StudentDirectory');
+    } catch (error) {
+      Alert.alert('Error', error.message || 'Could not save student record.');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  return (
+    <SafeAreaView style={styles.container}>
+      <ScrollView contentContainerStyle={styles.formContainer}>
+        <Text style={styles.formTitle}>{mode === 'edit' ? 'Edit Student Info' : 'Add New Student'}</Text>
+
+        <TextInput
+          style={styles.formInput}
+          placeholder="First Name"
+          placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+          value={firstName}
+          onChangeText={setFirstName}
+        />
+        <TextInput
+          style={styles.formInput}
+          placeholder="Last Name"
+          placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+          value={lastName}
+          onChangeText={setLastName}
+        />
+
+        <Text style={styles.formSectionLabel}>Emergency Contact 1 (Required)</Text>
+        <TextInput
+          style={styles.formInput}
+          placeholder="Emergency Contact 1 Name"
+          placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+          value={emergencyContact1Name}
+          onChangeText={setEmergencyContact1Name}
+        />
+        <TextInput
+          style={styles.formInput}
+          placeholder="Emergency Contact 1 Number"
+          placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+          value={emergencyContact1Number}
+          onChangeText={setEmergencyContact1Number}
+        />
+
+        <Text style={styles.formSectionLabel}>Emergency Contact 2 (Optional)</Text>
+        <TextInput
+          style={styles.formInput}
+          placeholder="Emergency Contact 2 Name"
+          placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+          value={emergencyContact2Name}
+          onChangeText={setEmergencyContact2Name}
+        />
+        <TextInput
+          style={styles.formInput}
+          placeholder="Emergency Contact 2 Number"
+          placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+          value={emergencyContact2Number}
+          onChangeText={setEmergencyContact2Number}
+        />
+
+        <Text style={styles.formSectionLabel}>Emergency Contact 3 (Optional)</Text>
+        <TextInput
+          style={styles.formInput}
+          placeholder="Emergency Contact 3 Name"
+          placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+          value={emergencyContact3Name}
+          onChangeText={setEmergencyContact3Name}
+        />
+        <TextInput
+          style={styles.formInput}
+          placeholder="Emergency Contact 3 Number"
+          placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+          value={emergencyContact3Number}
+          onChangeText={setEmergencyContact3Number}
+        />
+
+        <Text style={styles.formSectionLabel}>Allergies</Text>
+        <TextInput
+          style={styles.formInput}
+          placeholder="Allergies List (enter 'None' if no known allergies)"
+          placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+          value={allergies}
+          onChangeText={setAllergies}
+        />
+
+        <Text style={styles.formSectionLabel}>Medical Information</Text>
+        <TextInput
+          style={styles.formInput}
+          placeholder="Medical Aid Name"
+          placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+          value={medicalAidName}
+          onChangeText={setMedicalAidName}
+        />
+        <TextInput
+          style={styles.formInput}
+          placeholder="Medical Aid Number"
+          placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+          value={medicalAidNumber}
+          onChangeText={setMedicalAidNumber}
+        />
+        <TextInput
+          style={styles.formInput}
+          placeholder="Doctor Contact"
+          placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+          value={doctorContact}
+          onChangeText={setDoctorContact}
+        />
+        <TextInput
+          style={styles.formInput}
+          placeholder="Medical PIN"
+          placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+          value={medicalPin}
+          onChangeText={setMedicalPin}
+          secureTextEntry
+        />
+
+        <TouchableOpacity
+          style={[styles.saveStudentButton, isSaving && styles.saveStudentButtonDisabled]}
+          onPress={handleSubmit}
+          disabled={isSaving}
+        >
+          <Text style={styles.saveStudentButtonText}>{isSaving ? 'Saving...' : 'Save Student'}</Text>
+        </TouchableOpacity>
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -270,7 +526,38 @@ const styles = StyleSheet.create({
   subtitle: {
     fontSize: 16,
     color: '#243B53',
-    marginBottom: 14,
+    marginBottom: 8,
+  },
+  addStudentButton: {
+    alignSelf: 'flex-start',
+    backgroundColor: '#0B7285',
+    borderRadius: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    marginBottom: 12,
+  },
+  addStudentButtonText: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+  },
+  moduleCard: {
+    marginTop: 8,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#D9E2EC',
+  },
+  moduleTitle: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: '#102A43',
+    marginBottom: 4,
+  },
+  moduleSubtitle: {
+    color: '#486581',
+    fontSize: 14,
+    fontWeight: '500',
   },
   searchInput: {
     backgroundColor: '#FFFFFF',
@@ -316,7 +603,19 @@ const styles = StyleSheet.create({
     fontSize: 29,
     color: '#102A43',
     fontWeight: '800',
-    marginBottom: 14,
+    marginBottom: 10,
+  },
+  editStudentButton: {
+    alignSelf: 'flex-start',
+    marginBottom: 12,
+    backgroundColor: '#4C6EF5',
+    borderRadius: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+  },
+  editStudentButtonText: {
+    color: '#FFFFFF',
+    fontWeight: '700',
   },
   card: {
     backgroundColor: '#FFFFFF',
@@ -432,5 +731,46 @@ const styles = StyleSheet.create({
   modalButtonPrimaryText: {
     color: '#FFFFFF',
     fontWeight: '700',
+  },
+  formContainer: {
+    padding: 20,
+    paddingBottom: 30,
+  },
+  formTitle: {
+    fontSize: 24,
+    color: '#102A43',
+    fontWeight: '800',
+    marginBottom: 14,
+  },
+  formSectionLabel: {
+    color: '#102A43',
+    fontWeight: '700',
+    marginBottom: 6,
+    marginTop: 4,
+  },
+  formInput: {
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#BCCCDC',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 11,
+    marginBottom: 10,
+    fontSize: 15,
+  },
+  saveStudentButton: {
+    marginTop: 8,
+    backgroundColor: '#0B7285',
+    borderRadius: 10,
+    alignItems: 'center',
+    paddingVertical: 13,
+  },
+  saveStudentButtonDisabled: {
+    backgroundColor: '#94A3B8',
+  },
+  saveStudentButtonText: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+    fontSize: 16,
   },
 });

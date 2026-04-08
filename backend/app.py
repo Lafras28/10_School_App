@@ -3,14 +3,32 @@ from flask_cors import CORS
 from datetime import datetime, timezone
 import csv
 from pathlib import Path
-from openpyxl import load_workbook
+from openpyxl import Workbook, load_workbook
 
 app = Flask(__name__)
 CORS(app)
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-STUDENTS_XLSX_FILE = BASE_DIR / 'data' / 'students_template.xlsx'
-STUDENTS_CSV_FILE = BASE_DIR / 'data' / 'students_template.csv'
+STUDENTS_XLSX_FILE = BASE_DIR / 'Students' / 'students_template.xlsx'
+STUDENTS_CSV_FILE = BASE_DIR / 'Students' / 'students_template.csv'
+FALLBACK_XLSX_FILE = BASE_DIR / 'data' / 'students_template.xlsx'
+FALLBACK_CSV_FILE = BASE_DIR / 'data' / 'students_template.csv'
+STUDENT_COLUMNS = [
+    'id',
+    'firstName',
+    'lastName',
+    'emergencyContact1Name',
+    'emergencyContact1Number',
+    'emergencyContact2Name',
+    'emergencyContact2Number',
+    'emergencyContact3Name',
+    'emergencyContact3Number',
+    'allergies',
+    'medicalAidName',
+    'medicalAidNumber',
+    'doctorContact',
+    'medicalPin',
+]
 
 
 def parse_parent_contacts(raw_value):
@@ -29,12 +47,62 @@ def parse_parent_contacts(raw_value):
     return [part for part in parts if part]
 
 
+def parse_emergency_contacts(row):
+    contacts = []
+
+    # Preferred format from API payload.
+    payload_contacts = row.get('emergencyContacts')
+    if isinstance(payload_contacts, list):
+        for index, contact in enumerate(payload_contacts, start=1):
+            if not isinstance(contact, dict):
+                continue
+
+            name = str(contact.get('name') or '').strip()
+            number = str(contact.get('number') or '').strip()
+            if not name and not number:
+                continue
+
+            contacts.append({
+                'name': name or f'Emergency Contact {index}',
+                'number': number,
+            })
+
+    # Spreadsheet columns format.
+    if not contacts:
+        for index in range(1, 4):
+            name = str(row.get(f'emergencyContact{index}Name') or '').strip()
+            number = str(row.get(f'emergencyContact{index}Number') or '').strip()
+            if not name and not number:
+                continue
+
+            contacts.append({
+                'name': name or f'Emergency Contact {index}',
+                'number': number,
+            })
+
+    # Legacy fallback: parentContact string/list.
+    if not contacts:
+        parent_contact_raw = row.get('parentContact')
+        if isinstance(parent_contact_raw, list):
+            parsed_numbers = [str(number).strip() for number in parent_contact_raw if str(number).strip()]
+        else:
+            parsed_numbers = parse_parent_contacts(parent_contact_raw)
+
+        for index, number in enumerate(parsed_numbers[:3], start=1):
+            contacts.append({
+                'name': f'Emergency Contact {index}',
+                'number': number,
+            })
+
+    return contacts[:3]
+
+
 def normalize_student_record(row):
     return {
         'id': str(row.get('id') or '').strip(),
         'firstName': str(row.get('firstName') or '').strip(),
         'lastName': str(row.get('lastName') or '').strip(),
-        'parentContact': parse_parent_contacts(row.get('parentContact')),
+        'emergencyContacts': parse_emergency_contacts(row),
         'allergies': str(row.get('allergies') or 'None').strip(),
         'medicalAidName': str(row.get('medicalAidName') or '').strip(),
         'medicalAidNumber': str(row.get('medicalAidNumber') or '').strip(),
@@ -43,11 +111,39 @@ def normalize_student_record(row):
     }
 
 
+def students_to_sheet_row(student):
+    contacts = student.get('emergencyContacts', [])
+
+    def contact_name(position):
+        return contacts[position - 1].get('name', '') if len(contacts) >= position else ''
+
+    def contact_number(position):
+        return contacts[position - 1].get('number', '') if len(contacts) >= position else ''
+
+    return [
+        student.get('id', ''),
+        student.get('firstName', ''),
+        student.get('lastName', ''),
+        contact_name(1),
+        contact_number(1),
+        contact_name(2),
+        contact_number(2),
+        contact_name(3),
+        contact_number(3),
+        student.get('allergies', 'None'),
+        student.get('medicalAidName', ''),
+        student.get('medicalAidNumber', ''),
+        student.get('doctorContact', ''),
+        student.get('medicalPin', ''),
+    ]
+
+
 def load_students_from_xlsx():
-    if not STUDENTS_XLSX_FILE.exists():
+    target_file = STUDENTS_XLSX_FILE if STUDENTS_XLSX_FILE.exists() else FALLBACK_XLSX_FILE
+    if not target_file.exists():
         return []
 
-    workbook = load_workbook(STUDENTS_XLSX_FILE, data_only=True)
+    workbook = load_workbook(target_file, data_only=True)
     sheet = workbook.active
     rows = list(sheet.iter_rows(values_only=True))
     if not rows:
@@ -67,11 +163,12 @@ def load_students_from_xlsx():
 
 
 def load_students_from_csv():
-    if not STUDENTS_CSV_FILE.exists():
+    target_file = STUDENTS_CSV_FILE if STUDENTS_CSV_FILE.exists() else FALLBACK_CSV_FILE
+    if not target_file.exists():
         return []
 
     students = []
-    with STUDENTS_CSV_FILE.open(mode='r', encoding='utf-8', newline='') as csv_file:
+    with target_file.open(mode='r', encoding='utf-8', newline='') as csv_file:
         reader = csv.DictReader(csv_file)
         for row in reader:
             students.append(normalize_student_record(row))
@@ -85,6 +182,56 @@ def load_students():
         return students_from_xlsx
 
     return load_students_from_csv()
+
+
+def save_students_to_xlsx(students):
+    if STUDENTS_XLSX_FILE.exists():
+        workbook = load_workbook(STUDENTS_XLSX_FILE)
+    elif FALLBACK_XLSX_FILE.exists():
+        workbook = load_workbook(FALLBACK_XLSX_FILE)
+    else:
+        workbook = Workbook()
+
+    sheet = workbook.active
+
+    # Rewrite the worksheet from scratch to avoid stale rows after edits.
+    sheet.delete_rows(1, sheet.max_row)
+    sheet.append(STUDENT_COLUMNS)
+
+    for student in students:
+        sheet.append(students_to_sheet_row(student))
+
+    STUDENTS_XLSX_FILE.parent.mkdir(parents=True, exist_ok=True)
+    workbook.save(STUDENTS_XLSX_FILE)
+
+
+def validate_student_payload(payload):
+    missing = []
+
+    for field in ['firstName', 'lastName']:
+        if not str(payload.get(field, '')).strip():
+            missing.append(field)
+
+    contacts = payload.get('emergencyContacts', [])
+    first_contact = contacts[0] if contacts else {}
+    if not str(first_contact.get('name', '')).strip():
+        missing.append('emergencyContact1Name')
+    if not str(first_contact.get('number', '')).strip():
+        missing.append('emergencyContact1Number')
+
+    return missing
+
+
+def next_student_id(students):
+    highest = 0
+    for student in students:
+        value = str(student.get('id', '')).strip().lower()
+        if value.startswith('st-'):
+            suffix = value[3:]
+            if suffix.isdigit():
+                highest = max(highest, int(suffix))
+
+    return f'st-{highest + 1:03d}'
 
 
 @app.get('/health')
@@ -132,6 +279,50 @@ def create_incident():
 @app.get('/students')
 def list_students():
     return jsonify(load_students()), 200
+
+
+@app.post('/students')
+def create_student():
+    payload = request.get_json(silent=True) or {}
+    missing = validate_student_payload(payload)
+    if missing:
+        return jsonify({'error': 'Missing required fields.', 'missingFields': missing}), 400
+
+    students = load_students()
+    new_student = normalize_student_record(payload)
+    if not new_student['id']:
+        new_student['id'] = next_student_id(students)
+
+    existing = next((student for student in students if student['id'] == new_student['id']), None)
+    if existing:
+        return jsonify({'error': 'Student id already exists.'}), 409
+
+    students.append(new_student)
+    save_students_to_xlsx(students)
+    return jsonify({'message': 'Student added.', 'student': new_student}), 201
+
+
+@app.put('/students/<student_id>')
+def update_student(student_id):
+    payload = request.get_json(silent=True) or {}
+    students = load_students()
+
+    index = next((idx for idx, student in enumerate(students) if student['id'] == student_id), None)
+    if index is None:
+        return jsonify({'error': 'Student not found.'}), 404
+
+    merged_student = {
+        **students[index],
+        **normalize_student_record({**students[index], **payload, 'id': student_id}),
+    }
+
+    missing = validate_student_payload(merged_student)
+    if missing:
+        return jsonify({'error': 'Missing required fields.', 'missingFields': missing}), 400
+
+    students[index] = merged_student
+    save_students_to_xlsx(students)
+    return jsonify({'message': 'Student updated.', 'student': merged_student}), 200
 
 
 if __name__ == '__main__':

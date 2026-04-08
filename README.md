@@ -103,11 +103,12 @@ const API_BASE_URL = 'http://192.168.1.25:5000';
 
 ## Student Data Template (Excel)
 
-- Primary student list source: `data/students_template.xlsx`
+- Primary student list source: `Students/students_template.xlsx`
 - Teachers can update this Excel file directly with columns:
-  id, firstName, lastName, parentContact, allergies, medicalAidName, medicalAidNumber, doctorContact, medicalPin
-- For multiple parent numbers in one cell, separate values with `;`
-- Backend endpoint `/students` reads from `.xlsx` first, then falls back to `data/students_template.csv` if needed.
+  id, firstName, lastName, emergencyContact1Name, emergencyContact1Number, emergencyContact2Name, emergencyContact2Number, emergencyContact3Name, emergencyContact3Number, allergies, medicalAidName, medicalAidNumber, doctorContact, medicalPin
+- Emergency Contact 1 Name and Number are required.
+- Emergency Contacts 2 and 3 are optional.
+- Backend endpoint `/students` reads from `.xlsx` first, then falls back to `Students/students_template.csv` if needed.
 
 ## 5) GitHub Repository Linking
 
