@@ -1,0 +1,14 @@
+# Python
+venv*/
+__pycache__/
+*.pyc
+.env
+
+# Mobile / Node
+node_modules/
+.expo/
+dist/
+web-build/
+
+# Firebase / Secrets
+serviceAccountKey.json

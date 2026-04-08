@@ -1,0 +1,28 @@
+SCHOOL SAFETY APP - STARTUP STEPS (AFTER RESTART)
+
+Use 2 terminals.
+
+TERMINAL A - BACKEND (Flask)
+1) cd C:\Users\fritz\OneDrive\Desktop\05_Projects\10_School_App
+2) Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+3) .\venv_schoolapp\Scripts\Activate.ps1
+4) python .\backend\app.py
+
+Expected backend URL:
+- http://127.0.0.1:5000
+
+TERMINAL B - MOBILE (Expo Web)
+1) cd C:\Users\fritz\OneDrive\Desktop\05_Projects\10_School_App\mobile
+2) Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+3) npm.cmd run web
+
+Expected mobile URL:
+- http://localhost:8081
+
+IF npm/node NOT FOUND
+Run this in Terminal B, then retry step 3:
+$env:Path = "C:\Program Files\nodejs;" + $env:Path
+
+NOTES
+- Do NOT run create-expo-app again.
+- Only run install commands again if dependencies changed.
