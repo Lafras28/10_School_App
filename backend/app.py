@@ -1,9 +1,16 @@
-from flask import Flask, jsonify, request
-from flask_cors import CORS
-from datetime import datetime, timezone
 import csv
+from datetime import date, datetime, timezone
+from io import BytesIO
 from pathlib import Path
+
+from flask import Flask, jsonify, request, send_file
+from flask_cors import CORS
 from openpyxl import Workbook, load_workbook
+
+from attendance_register import get_daily_register, list_attendance_entries_for_range, update_attendance_entry
+from incident_register import create_incident_record, list_incidents
+from medicine_log import create_medicine_record, list_medicine_logs
+from pdf_export import build_compliance_report_pdf
 
 app = Flask(__name__)
 CORS(app)
@@ -28,7 +35,17 @@ STUDENT_COLUMNS = [
     'medicalAidNumber',
     'doctorContact',
     'medicalPin',
+    'className',
 ]
+DEFAULT_CLASSROOMS = ['Sunshine Bunnies', 'Rainbow Cubs', 'Little Explorers']
+
+
+def infer_class_name(student_id):
+    value = str(student_id or '').strip().lower()
+    if value.startswith('st-') and value[3:].isdigit():
+        return DEFAULT_CLASSROOMS[(int(value[3:]) - 1) % len(DEFAULT_CLASSROOMS)]
+
+    return DEFAULT_CLASSROOMS[0]
 
 
 def parse_parent_contacts(raw_value):
@@ -98,8 +115,11 @@ def parse_emergency_contacts(row):
 
 
 def normalize_student_record(row):
+    student_id = str(row.get('id') or '').strip()
+    class_name = str(row.get('className') or row.get('classroom') or '').strip()
+
     return {
-        'id': str(row.get('id') or '').strip(),
+        'id': student_id,
         'firstName': str(row.get('firstName') or '').strip(),
         'lastName': str(row.get('lastName') or '').strip(),
         'emergencyContacts': parse_emergency_contacts(row),
@@ -108,6 +128,7 @@ def normalize_student_record(row):
         'medicalAidNumber': str(row.get('medicalAidNumber') or '').strip(),
         'doctorContact': str(row.get('doctorContact') or '').strip(),
         'medicalPin': str(row.get('medicalPin') or '').strip(),
+        'className': class_name or infer_class_name(student_id),
     }
 
 
@@ -135,6 +156,7 @@ def students_to_sheet_row(student):
         student.get('medicalAidNumber', ''),
         student.get('doctorContact', ''),
         student.get('medicalPin', ''),
+        student.get('className', infer_class_name(student.get('id', ''))),
     ]
 
 
@@ -234,6 +256,50 @@ def next_student_id(students):
     return f'st-{highest + 1:03d}'
 
 
+def get_student_by_id(student_id):
+    target_id = str(student_id or '').strip()
+    if not target_id:
+        return None
+
+    return next((student for student in load_students() if student.get('id') == target_id), None)
+
+
+def normalize_register_date(raw_value):
+    value = str(raw_value or '').strip()
+    if not value:
+        return datetime.now().date().isoformat()
+
+    try:
+        return date.fromisoformat(value).isoformat()
+    except ValueError as exc:
+        raise ValueError('Date must use YYYY-MM-DD format.') from exc
+
+
+def parse_created_at(raw_value):
+    value = str(raw_value or '').strip()
+    if not value:
+        return None
+
+    try:
+        return datetime.fromisoformat(value.replace('Z', '+00:00'))
+    except ValueError:
+        return None
+
+
+def filter_records_by_created_at(records, start_date, end_date, field_name='createdAt'):
+    filtered = []
+    for record in records:
+        created_at = parse_created_at(record.get(field_name) or record.get('createdAt'))
+        if created_at is None:
+            continue
+
+        created_date = created_at.date().isoformat()
+        if start_date <= created_date <= end_date:
+            filtered.append(record)
+
+    return filtered
+
+
 @app.get('/health')
 def health_check():
     return jsonify({
@@ -274,6 +340,129 @@ def create_incident():
     }
 
     return jsonify(response), 201
+
+
+@app.get('/attendance')
+def list_attendance():
+    try:
+        register_date = normalize_register_date(request.args.get('date'))
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+
+    students = load_students()
+    entries = get_daily_register(register_date, students)
+    return jsonify({'date': register_date, 'entries': entries}), 200
+
+
+@app.put('/attendance/<register_date>/<student_id>')
+def update_attendance(register_date, student_id):
+    student = get_student_by_id(student_id)
+    if student is None:
+        return jsonify({'error': 'Student not found.'}), 404
+
+    payload = request.get_json(silent=True) or {}
+    try:
+        normalized_date = normalize_register_date(register_date)
+        entry = update_attendance_entry(
+            normalized_date,
+            student,
+            payload.get('status', 'Present'),
+            payload.get('reason', ''),
+        )
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+
+    return jsonify({'message': 'Attendance updated.', 'entry': entry}), 200
+
+
+@app.get('/incidents')
+def list_incident_records():
+    return jsonify(list_incidents()), 200
+
+
+@app.post('/incidents')
+def create_incident_entry():
+    payload = request.get_json(silent=True) or {}
+    student_id = str(payload.get('studentId') or '').strip()
+    student = get_student_by_id(student_id) if student_id else None
+
+    if student_id and student is None:
+        return jsonify({'error': 'Student not found.'}), 404
+
+    try:
+        incident = create_incident_record(payload, student)
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+
+    return jsonify({'message': 'Incident recorded and locked.', 'incident': incident}), 201
+
+
+@app.route('/incidents/<incident_id>', methods=['PUT', 'PATCH', 'DELETE'])
+def incident_record_read_only(incident_id):
+    return jsonify({
+        'error': 'Incident records are read-only after saving for legal compliance.',
+        'incidentId': incident_id,
+    }), 403
+
+
+@app.get('/medicine')
+def list_medicine_entries():
+    return jsonify(list_medicine_logs()), 200
+
+
+@app.post('/medicine')
+def create_medicine_entry():
+    payload = request.get_json(silent=True) or {}
+    student_id = str(payload.get('studentId') or '').strip()
+    student = get_student_by_id(student_id)
+    if student is None:
+        return jsonify({'error': 'Student not found.'}), 404
+
+    try:
+        entry = create_medicine_record(payload, student)
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+
+    return jsonify({
+        'message': 'Medicine administration logged.',
+        'entry': entry,
+        'warning': 'WARNING: Medication matches a recorded allergy.' if entry.get('allergyWarning') else '',
+    }), 201
+
+
+@app.get('/exports/compliance-report')
+def export_compliance_report():
+    school_name = str(request.args.get('schoolName') or 'School Safety & Compliance Centre').strip()
+    try:
+        start_date = normalize_register_date(request.args.get('startDate'))
+        end_date = normalize_register_date(request.args.get('endDate') or start_date)
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+
+    if start_date > end_date:
+        return jsonify({'error': 'startDate must be before or equal to endDate.'}), 400
+
+    students = load_students()
+    attendance_entries = list_attendance_entries_for_range(start_date, end_date, students)
+    incidents = filter_records_by_created_at(list_incidents(), start_date, end_date, field_name='timestamp')
+    medicine_entries = filter_records_by_created_at(list_medicine_logs(), start_date, end_date, field_name='timeAdministered')
+
+    pdf_bytes = build_compliance_report_pdf(
+        school_name=school_name,
+        start_date=start_date,
+        end_date=end_date,
+        attendance_entries=attendance_entries,
+        incidents=incidents,
+        medicine_logs=medicine_entries,
+    )
+
+    filename = f'compliance-report-{start_date}-to-{end_date}.pdf'
+    return send_file(
+        BytesIO(pdf_bytes),
+        mimetype='application/pdf',
+        as_attachment=True,
+        download_name=filename,
+    )
 
 
 @app.get('/students')

@@ -1,0 +1,35 @@
+PHONE DEPLOY CHECKLIST
+======================
+
+1) Put the backend online
+- Push this project to GitHub.
+- In Render: New + -> Web Service -> connect the repo.
+- Render will use the included render.yaml file.
+- Wait for the service to go live and copy the URL.
+- Test it in a browser:
+  https://YOUR-RENDER-URL/health
+
+2) Point the mobile app to the live backend
+- In the mobile folder, copy `.env.example` to `.env`
+- Replace the sample URL with your real Render URL:
+  EXPO_PUBLIC_API_URL=https://YOUR-RENDER-URL
+
+3) Build an Android APK
+- Open a terminal in the `mobile` folder and run:
+  npm install
+  npx eas login
+  npx eas build:configure
+  npx eas build -p android --profile preview
+
+- EAS will give you a download link for the APK.
+- Open that link on your Android phone and install it.
+
+4) Quick remote testing without a final APK
+- In the `mobile` folder run:
+  npm run start:tunnel
+- Open the QR/link in Expo Go.
+
+Notes
+- The app already uses Firebase for most data.
+- The hosted backend is still needed for backend fallback calls and PDF export.
+- Once the APK is installed, the app can work over mobile data or any Wi-Fi, without the laptop being nearby.

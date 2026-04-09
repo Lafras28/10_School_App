@@ -29,16 +29,18 @@ Starter project to support DSD (Bana Pele) norms and standards with POPIA-aware 
    - ESLint (optional)
    - Expo Tools (optional)
 2. Open this workspace folder in VS Code.
-3. Open terminal in VS Code and set up Python backend:
+3. Use **one** backend virtual environment for this repo: `venv_schoolapp`.
+4. Open terminal in VS Code and set up the Python backend from the project root:
 
 ```bash
-cd backend
-python -m venv .venv
+python -m venv venv_schoolapp
 # Windows PowerShell:
-.\.venv\Scripts\Activate.ps1
-pip install -r ..\requirements.txt
-python app.py
+.\venv_schoolapp\Scripts\Activate.ps1
+pip install -r requirements.txt
+python .\backend\app.py
 ```
+
+If an old `.venv` exists, ignore it or remove it after confirming `venv_schoolapp` works.
 
 Backend runs on `http://localhost:5000`.
 

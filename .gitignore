@@ -1,5 +1,7 @@
 # Python
+.venv/
 venv*/
+venv_schoolapp/
 __pycache__/
 *.pyc
 .env

@@ -1,21 +1,21 @@
-id,firstName,lastName,parentContact,allergies,medicalAidName,medicalAidNumber,doctorContact,medicalPin
-st-001,Lebo,Mokoena,+27721234567; +27831234567,Peanuts,Discovery Health,DH-4582-7781,+27115550123,1234
-st-002,Aisha,Khan,+27729876543,None,Bonitas,BN-9011-2200,+27115550987,2222
-st-003,Sipho,Dlamini,+27724445555; +27834445555,Asthma (inhaler required),Medihelp,MH-3210-1109,+27115554444,3333
-st-004,Thando,Ndlovu,+27720112233,None,Fedhealth,FH-1200-4567,+27115551234,4444
-st-005,Zara,Patel,+27727894561,Milk allergy,Discovery Health,DH-6523-9191,+27115557654,5555
-st-006,Kabelo,Radebe,+27728765432,None,KeyHealth,KH-5531-8899,+27115552345,6666
-st-007,Amara,Naidoo,+27724561234,Egg allergy,Bonitas,BN-3001-7722,+27115553456,7777
-st-008,Tshepo,Modise,+27723334444,None,Momentum Health,MM-4402-1188,+27115554567,8888
-st-009,Naledi,Masango,+27726667777,Seafood allergy,Bestmed,BM-7788-9911,+27115555678,9999
-st-010,Imran,Ismail,+27725556666,None,Discovery Health,DH-8833-2244,+27115556789,2468
-st-011,Liyema,Zulu,+27724443332,Penicillin allergy,Medihelp,MH-9090-4433,+27115557890,1357
-st-012,Palesa,Khoza,+27723332221,None,Bonitas,BN-2020-1111,+27115558901,1212
-st-013,Rea,Sekgobela,+27728889999,Peanuts,Profmed,PM-1002-3004,+27115559012,2323
-st-014,Yusuf,Abrahams,+27727776665,None,Fedhealth,FH-5544-3322,+27115550111,3434
-st-015,Asanda,Gumede,+27726665554,Lactose intolerance,Bestmed,BM-6789-1002,+27115550222,4545
-st-016,Neo,Marumo,+27725554443,None,Discovery Health,DH-2288-1133,+27115550333,5656
-st-017,Anika,Pillay,+27724443322,Bee sting allergy,Bonitas,BN-9172-8844,+27115550444,6767
-st-018,Kgosi,Molefe,+27723332211,None,KeyHealth,KH-7744-5588,+27115550555,7878
-st-019,Zinhle,Mthembu,+27722221110,Tree nut allergy,Medihelp,MH-3311-6655,+27115550666,8989
-st-020,Noah,Smith,+27721110009,None,Discovery Health,DH-0099-5544,+27115550777,9090
+id,firstName,lastName,parentContact,allergies,medicalAidName,medicalAidNumber,doctorContact,medicalPin,className
+st-001,Lebo,Mokoena,+27721234567; +27831234567,Peanuts,Discovery Health,DH-4582-7781,+27115550123,1234,Sunshine Bunnies
+st-002,Aisha,Khan,+27729876543,None,Bonitas,BN-9011-2200,+27115550987,2222,Rainbow Cubs
+st-003,Sipho,Dlamini,+27724445555; +27834445555,Asthma (inhaler required),Medihelp,MH-3210-1109,+27115554444,3333,Little Explorers
+st-004,Thando,Ndlovu,+27720112233,None,Fedhealth,FH-1200-4567,+27115551234,4444,Sunshine Bunnies
+st-005,Zara,Patel,+27727894561,Milk allergy,Discovery Health,DH-6523-9191,+27115557654,5555,Rainbow Cubs
+st-006,Kabelo,Radebe,+27728765432,None,KeyHealth,KH-5531-8899,+27115552345,6666,Little Explorers
+st-007,Amara,Naidoo,+27724561234,Egg allergy,Bonitas,BN-3001-7722,+27115553456,7777,Sunshine Bunnies
+st-008,Tshepo,Modise,+27723334444,None,Momentum Health,MM-4402-1188,+27115554567,8888,Rainbow Cubs
+st-009,Naledi,Masango,+27726667777,Seafood allergy,Bestmed,BM-7788-9911,+27115555678,9999,Little Explorers
+st-010,Imran,Ismail,+27725556666,None,Discovery Health,DH-8833-2244,+27115556789,2468,Sunshine Bunnies
+st-011,Liyema,Zulu,+27724443332,Penicillin allergy,Medihelp,MH-9090-4433,+27115557890,1357,Rainbow Cubs
+st-012,Palesa,Khoza,+27723332221,None,Bonitas,BN-2020-1111,+27115558901,1212,Little Explorers
+st-013,Rea,Sekgobela,+27728889999,Peanuts,Profmed,PM-1002-3004,+27115559012,2323,Sunshine Bunnies
+st-014,Yusuf,Abrahams,+27727776665,None,Fedhealth,FH-5544-3322,+27115550111,3434,Rainbow Cubs
+st-015,Asanda,Gumede,+27726665554,Lactose intolerance,Bestmed,BM-6789-1002,+27115550222,4545,Little Explorers
+st-016,Neo,Marumo,+27725554443,None,Discovery Health,DH-2288-1133,+27115550333,5656,Sunshine Bunnies
+st-017,Anika,Pillay,+27724443322,Bee sting allergy,Bonitas,BN-9172-8844,+27115550444,6767,Rainbow Cubs
+st-018,Kgosi,Molefe,+27723332211,None,KeyHealth,KH-7744-5588,+27115550555,7878,Little Explorers
+st-019,Zinhle,Mthembu,+27722221110,Tree nut allergy,Medihelp,MH-3311-6655,+27115550666,8989,Sunshine Bunnies
+st-020,Noah,Smith,+27721110009,None,Discovery Health,DH-0099-5544,+27115550777,9090,Rainbow Cubs

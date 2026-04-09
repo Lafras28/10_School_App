@@ -1,0 +1,26 @@
+[
+  {
+    "id": "med-09a4d2ec0a",
+    "studentId": "st-011",
+    "studentName": "Liyema Zulu",
+    "medicationName": "Penicillin Syrup",
+    "dosage": "5ml",
+    "staffMember": "Teacher Zanele",
+    "allergies": "Penicillin allergy",
+    "allergyWarning": true,
+    "timeAdministered": "2026-04-08T17:43:21.094158+00:00",
+    "createdAt": "2026-04-08T17:43:21.094158+00:00"
+  },
+  {
+    "id": "med-bec6c1f9cb",
+    "studentId": "st-011",
+    "studentName": "Liyema Zulu",
+    "medicationName": "Penicillin Syrup",
+    "dosage": "5ml",
+    "staffMember": "Teacher Zanele",
+    "allergies": "Penicillin allergy",
+    "allergyWarning": false,
+    "timeAdministered": "2026-04-08T17:42:45.081834+00:00",
+    "createdAt": "2026-04-08T17:42:45.081834+00:00"
+  }
+]

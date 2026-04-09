@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "mobile",
+    "name": "School Safety",
     "slug": "mobile",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -9,9 +9,11 @@
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.banapele.schoolsafety"
     },
     "android": {
+      "package": "com.banapele.schoolsafety",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
