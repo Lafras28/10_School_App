@@ -29,7 +29,20 @@ PHONE DEPLOY CHECKLIST
   npm run start:tunnel
 - Open the QR/link in Expo Go.
 
+5) Web app with a home-screen icon (iPhone + Android)
+- In Render: New + -> Static Site -> connect the same GitHub repo.
+- Use these settings:
+  Root Directory: mobile
+  Build Command: npm install && npx expo export --platform web
+  Publish Directory: dist
+- Add this environment variable in the static site settings:
+  EXPO_PUBLIC_API_URL=https://school-safety-api.onrender.com
+- Deploy the static site and open its URL on the phone.
+- iPhone: open in Safari -> Share -> Add to Home Screen.
+- Android: open in Chrome -> Add to Home Screen / Install App.
+
 Notes
 - The app already uses Firebase for most data.
 - The hosted backend is still needed for backend fallback calls and PDF export.
+- The web app option gives both iPhone and Android users a home-screen icon without needing the app stores.
 - Once the APK is installed, the app can work over mobile data or any Wi-Fi, without the laptop being nearby.

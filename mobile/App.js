@@ -1,6 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
+  Keyboard,
   Linking,
   Modal,
   Platform,
@@ -10,20 +11,32 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
+  TouchableWithoutFeedback,
   View,
 } from 'react-native';
+import * as DocumentPicker from 'expo-document-picker';
+import * as Print from 'expo-print';
+import * as Sharing from 'expo-sharing';
 import Constants from 'expo-constants';
 import { NavigationContainer, useFocusEffect } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import {
   DEFAULT_ROLE_PERMISSIONS,
+  deleteActivityFromFirestore,
+  deleteComplianceDocument,
+  fetchAllAttendanceFromFirestore,
+  fetchActivitiesFromFirestore,
   fetchAttendanceFromFirestore,
+  fetchComplianceDocuments,
   fetchIncidentsFromFirestore,
   fetchMedicineLogsFromFirestore,
   fetchStudentsFromFirestore,
   fetchUserAccessProfiles,
   listenToAuthChanges,
   saveAttendanceToFirestore,
+  saveActivityToFirestore,
+  updateActivityInFirestore,
+  saveComplianceDocument,
   saveIncidentToFirestore,
   saveMedicineLogToFirestore,
   saveStudentToFirestore,
@@ -67,10 +80,22 @@ const Stack = createNativeStackNavigator();
 const FORM_PLACEHOLDER_COLOR = '#334E68';
 const TODAY = new Date().toISOString().split('T')[0];
 const DEFAULT_SCHOOL_NAME = 'Bana Pele Preschool';
+const PARENT_ABSENT_REASON = 'Parent marked absent in app';
 const CLASSROOM_OPTIONS = ['All Classes', 'Sunshine Bunnies', 'Rainbow Cubs', 'Little Explorers'];
-const ROLE_OPTIONS = ['principal', 'teacher', 'viewer'];
+const ROLE_OPTIONS = ['principal', 'teacher', 'viewer', 'parent'];
+const COMPLIANCE_FOLDERS = [
+  { key: 'evacuation_plan', label: 'Emergency Evacuation Plan', icon: '🚨', description: 'Fire and emergency evacuation routes and procedures' },
+  { key: 'fire_safety', label: 'Fire Safety Certificate', icon: '🔥', description: 'Annual fire safety inspection certificates' },
+  { key: 'health_safety', label: 'Health & Safety Policy', icon: '🏥', description: 'Health and safety policy documentation' },
+  { key: 'dsd_registration', label: 'DSD Registration Certificate', icon: '📋', description: 'Department of Social Development registration and renewals' },
+  { key: 'child_protection', label: 'Child Protection Policy', icon: '🛡️', description: 'Child protection and safeguarding policy documents' },
+  { key: 'first_aid', label: 'First Aid Records', icon: '⛑️', description: 'First aid qualifications and incident records' },
+  { key: 'nutrition_menu', label: 'Nutrition & Menu Plan', icon: '🥗', description: 'Approved menus and nutrition guidelines' },
+  { key: 'practitioner_register', label: 'Practitioner Registers', icon: '📝', description: 'Staff qualifications, registers, and attendance records' },
+];
 const MANAGEABLE_PERMISSION_OPTIONS = [
   { key: 'canEditStudents', label: 'Edit students' },
+  { key: 'canEditOwnChildMedicalInfo', label: 'Edit child medical' },
   { key: 'canTakeAttendance', label: 'Attendance' },
   { key: 'canLogIncidents', label: 'Incidents' },
   { key: 'canLogMedicine', label: 'Medicine' },
@@ -83,6 +108,7 @@ const AccessContext = createContext({
   displayName: 'Staff Member',
   role: 'teacher',
   permissions: DEFAULT_ROLE_PERMISSIONS.teacher,
+  linkedStudentIds: [],
 });
 
 function useAccessProfile() {
@@ -91,6 +117,116 @@ function useAccessProfile() {
 
 function hasPermission(accessProfile, permission) {
   return Boolean(accessProfile?.permissions?.[permission]);
+}
+
+function isParentRole(accessProfile) {
+  return String(accessProfile?.role || '').trim().toLowerCase() === 'parent';
+}
+
+function formatCompactDateDisplay(year, month, day) {
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const monthIndex = Math.max(0, Math.min(11, parseInt(month, 10) - 1));
+  return `${months[monthIndex]} ${parseInt(day, 10)}, ${year}`;
+}
+
+function CompactDatePickerModal({ visible, onClose, onDateSelect, currentYear: cy, currentMonth: cm, currentDay: cd }) {
+  const [tempYear, setTempYear] = useState(cy);
+  const [tempMonth, setTempMonth] = useState(cm);
+  const [tempDay, setTempDay] = useState(cd);
+  const yearOptions = Array.from({ length: 11 }, (_, i) => String(cy - 5 + i));
+  const monthOptions = Array.from({ length: 12 }, (_, i) => String(i + 1).padStart(2, '0'));
+  const dayOptions = Array.from({ length: 31 }, (_, i) => String(i + 1).padStart(2, '0'));
+
+  useEffect(() => {
+    setTempYear(cy);
+    setTempMonth(cm);
+    setTempDay(cd);
+  }, [cy, cm, cd, visible]);
+
+  const handleConfirm = () => {
+    onDateSelect(tempYear, tempMonth, tempDay);
+    onClose();
+  };
+
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <TouchableWithoutFeedback onPress={onClose}>
+        <View style={styles.datePickerBackdrop}>
+          <TouchableWithoutFeedback onPress={() => {}}>
+            <View style={styles.datePickerModalCard}>
+              <Text style={styles.datePickerModalTitle}>Select Date</Text>
+
+              <View style={styles.compactDatePickerRow}>
+                <CompactDatePickerColumn
+                  items={monthOptions}
+                  selectedValue={tempMonth}
+                  onSelect={setTempMonth}
+                  label="Month"
+                />
+                <CompactDatePickerColumn
+                  items={dayOptions}
+                  selectedValue={tempDay}
+                  onSelect={setTempDay}
+                  label="Day"
+                />
+                <CompactDatePickerColumn
+                  items={yearOptions}
+                  selectedValue={tempYear}
+                  onSelect={setTempYear}
+                  label="Year"
+                />
+              </View>
+
+              <View style={styles.datePickerModalButtonRow}>
+                <TouchableOpacity style={styles.datePickerModalCancelBtn} onPress={onClose}>
+                  <Text style={styles.datePickerModalCancelText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.datePickerModalConfirmBtn} onPress={handleConfirm}>
+                  <Text style={styles.datePickerModalConfirmText}>OK</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </TouchableWithoutFeedback>
+        </View>
+      </TouchableWithoutFeedback>
+    </Modal>
+  );
+}
+
+function getLinkedStudentIds(accessProfile) {
+  return Array.isArray(accessProfile?.linkedStudentIds)
+    ? accessProfile.linkedStudentIds.map((value) => String(value || '').trim()).filter(Boolean)
+    : [];
+}
+
+function canAccessStudent(accessProfile, studentOrId) {
+  if (!isParentRole(accessProfile)) {
+    return true;
+  }
+
+  const studentId = typeof studentOrId === 'string'
+    ? String(studentOrId || '').trim()
+    : String(studentOrId?.id || '').trim();
+
+  return getLinkedStudentIds(accessProfile).includes(studentId);
+}
+
+function filterStudentsByAccess(students, accessProfile) {
+  if (!isParentRole(accessProfile)) {
+    return Array.isArray(students) ? students : [];
+  }
+
+  const linkedIds = new Set(getLinkedStudentIds(accessProfile));
+  return (Array.isArray(students) ? students : []).filter((student) => linkedIds.has(String(student?.id || '').trim()));
+}
+
+function filterRecordsByAccess(records, accessProfile) {
+  if (!isParentRole(accessProfile)) {
+    return Array.isArray(records) ? records : [];
+  }
+
+  const linkedIds = new Set(getLinkedStudentIds(accessProfile));
+  return (Array.isArray(records) ? records : []).filter((record) => linkedIds.has(String(record?.studentId || '').trim()));
 }
 
 function formatRoleLabel(role = 'teacher') {
@@ -241,10 +377,36 @@ function buildDefaultAttendanceEntries(registerDate, students = []) {
 }
 
 async function loadAttendanceFromDataStore(registerDate, students = []) {
+  const defaultEntries = buildDefaultAttendanceEntries(registerDate, students);
+
+  const mergeAttendanceEntries = (savedEntries = []) => {
+    const mergedEntries = new Map(defaultEntries.map((defaultEntry) => [defaultEntry.studentId, defaultEntry]));
+
+    (Array.isArray(savedEntries) ? savedEntries : []).forEach((entry) => {
+      const studentId = String(entry?.studentId || '').trim();
+      if (!studentId) {
+        return;
+      }
+
+      const normalizedStatus = String(entry?.status || 'Present').trim();
+      mergedEntries.set(studentId, {
+        ...(mergedEntries.get(studentId) || {}),
+        ...entry,
+        studentId,
+        status: normalizedStatus || 'Present',
+        reason: ['Absent', 'Late'].includes(normalizedStatus) ? String(entry?.reason || '').trim() : '',
+      });
+    });
+
+    return Array.from(mergedEntries.values())
+      .filter((entry) => entry.studentId)
+      .sort((left, right) => String(left.studentName || '').localeCompare(String(right.studentName || '')));
+  };
+
   try {
     const firestoreEntries = await fetchAttendanceFromFirestore(registerDate);
     if (Array.isArray(firestoreEntries) && firestoreEntries.length > 0) {
-      return firestoreEntries;
+      return mergeAttendanceEntries(firestoreEntries);
     }
   } catch (error) {
     console.warn('Firestore attendance unavailable, using fallback data.', error);
@@ -260,27 +422,43 @@ async function loadAttendanceFromDataStore(registerDate, students = []) {
       } catch (error) {
         console.warn('Could not seed Firestore attendance from backend data.', error);
       }
-      return nextEntries;
+      return mergeAttendanceEntries(nextEntries);
     }
   } catch (error) {
     console.warn('Backend attendance unavailable, generating defaults from student data.', error);
-  }
-
-  const defaultEntries = buildDefaultAttendanceEntries(registerDate, students);
-  if (defaultEntries.length > 0) {
-    try {
-      await seedAttendanceToFirestore(defaultEntries);
-    } catch (error) {
-      console.warn('Could not seed default attendance entries to Firestore.', error);
-    }
   }
 
   return defaultEntries;
 }
 
 async function saveAttendanceRecord(registerDate, entry, status, reason = '') {
+  const normalizedStatus = String(status || entry?.status || 'Present').trim() || 'Present';
+  const normalizedReason = ['Absent', 'Late'].includes(normalizedStatus) ? String(reason || '').trim() : '';
+  const optimisticEntry = {
+    ...entry,
+    date: String(registerDate || entry?.date || '').trim(),
+    status: normalizedStatus,
+    reason: normalizedReason,
+    updatedAt: new Date().toISOString(),
+  };
+
   try {
-    return await saveAttendanceToFirestore(registerDate, entry, status, reason);
+    const savedFirestoreEntry = await saveAttendanceToFirestore(registerDate, entry, normalizedStatus, normalizedReason);
+
+    // Keep backend fallback storage aligned so staff still sees latest attendance when Firestore is unavailable.
+    try {
+      await fetchJson(`${API_BASE_URL}/attendance/${registerDate}/${entry.studentId}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ status: normalizedStatus, reason: normalizedReason }),
+      });
+    } catch (backendSyncError) {
+      console.warn('Backend attendance sync skipped after Firestore save.', backendSyncError);
+    }
+
+    return savedFirestoreEntry;
   } catch (firestoreError) {
     console.warn('Firestore attendance save failed, using backend fallback.', firestoreError);
 
@@ -289,10 +467,10 @@ async function saveAttendanceRecord(registerDate, entry, status, reason = '') {
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ status, reason }),
+      body: JSON.stringify({ status: normalizedStatus, reason: normalizedReason }),
     });
 
-    return data?.entry || entry;
+    return data?.entry ? { ...optimisticEntry, ...data.entry } : optimisticEntry;
   }
 }
 
@@ -444,6 +622,7 @@ function StudentAutocomplete({
   students,
   selectedStudentId,
   onSelect,
+  onStudentChosen,
   placeholder = 'Search learner by name or ID',
   helperText = 'Start typing to find a learner quickly.',
 }) {
@@ -463,50 +642,72 @@ function StudentAutocomplete({
 
   const suggestions = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
-    const pool = !normalizedQuery
-      ? students
-      : students.filter((student) => {
-          const name = getStudentFullName(student).toLowerCase();
-          const studentId = String(student.id || '').toLowerCase();
-          return name.includes(normalizedQuery) || studentId.includes(normalizedQuery);
-        });
+    if (!normalizedQuery) {
+      return [];
+    }
 
-    return pool.slice(0, 8);
+    const pool = students.filter((student) => {
+      const name = getStudentFullName(student).toLowerCase();
+      const studentId = String(student.id || '').toLowerCase();
+      return name.includes(normalizedQuery) || studentId.includes(normalizedQuery);
+    });
+
+    return pool.slice(0, 12);
   }, [query, students]);
 
   const handleSelect = (student) => {
     onSelect(student.id);
     setQuery(getStudentFullName(student));
     setShowSuggestions(false);
+
+    if (typeof onStudentChosen === 'function') {
+      onStudentChosen(student);
+    }
+  };
+
+  const handleClearSearch = () => {
+    onSelect('');
+    setQuery('');
+    setShowSuggestions(false);
+    Keyboard.dismiss();
   };
 
   return (
     <View style={styles.autocompleteContainer}>
-      <TextInput
-        style={styles.formInput}
-        placeholder={placeholder}
-        placeholderTextColor={FORM_PLACEHOLDER_COLOR}
-        value={query}
-        onFocus={() => setShowSuggestions(true)}
-        onChangeText={(text) => {
-          setQuery(text);
-          setShowSuggestions(true);
-        }}
-      />
+      <View style={styles.searchInputRow}>
+        <TextInput
+          style={styles.autocompleteTextInput}
+          placeholder={placeholder}
+          placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+          value={query}
+          onFocus={() => setShowSuggestions(true)}
+          onChangeText={(text) => {
+            setQuery(text);
+            setShowSuggestions(true);
+          }}
+        />
+        {query.trim() ? (
+          <TouchableOpacity style={styles.clearSearchButton} onPress={handleClearSearch}>
+            <Text style={styles.clearSearchButtonText}>×</Text>
+          </TouchableOpacity>
+        ) : null}
+      </View>
 
-      {showSuggestions ? (
+      {showSuggestions && query.trim() ? (
         <View style={styles.autocompleteResults}>
           {suggestions.length > 0 ? (
-            suggestions.map((student) => (
-              <TouchableOpacity
-                key={student.id}
-                style={styles.autocompleteItem}
-                onPress={() => handleSelect(student)}
-              >
-                <Text style={styles.autocompleteName}>{getStudentFullName(student)}</Text>
-                <Text style={styles.autocompleteMeta}>{student.id} • {getClassroomName(student)}</Text>
-              </TouchableOpacity>
-            ))
+            <ScrollView nestedScrollEnabled style={styles.autocompleteScrollArea}>
+              {suggestions.map((student) => (
+                <TouchableOpacity
+                  key={student.id}
+                  style={styles.autocompleteItem}
+                  onPress={() => handleSelect(student)}
+                >
+                  <Text style={styles.autocompleteName}>{getStudentFullName(student)}</Text>
+                  <Text style={styles.autocompleteMeta}>{student.id} • {getClassroomName(student)}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
           ) : (
             <Text style={styles.autocompleteEmpty}>No learners match that search.</Text>
           )}
@@ -522,6 +723,131 @@ function StudentAutocomplete({
   );
 }
 
+function LinkedStudentPicker({
+  students,
+  linkedStudentIds,
+  onToggleStudent,
+  disabled = false,
+}) {
+  const [query, setQuery] = useState('');
+  const [showSuggestions, setShowSuggestions] = useState(false);
+
+  const normalizedLinkedIds = useMemo(
+    () => (Array.isArray(linkedStudentIds) ? linkedStudentIds : []).map((value) => String(value || '').trim()).filter(Boolean),
+    [linkedStudentIds],
+  );
+
+  const linkedIdSet = useMemo(() => new Set(normalizedLinkedIds), [normalizedLinkedIds]);
+
+  const linkedStudents = useMemo(
+    () => (Array.isArray(students) ? students : [])
+      .filter((student) => linkedIdSet.has(String(student?.id || '').trim()))
+      .sort((left, right) => getStudentFullName(left).localeCompare(getStudentFullName(right))),
+    [students, linkedIdSet],
+  );
+
+  const suggestions = useMemo(() => {
+    const normalizedQuery = query.trim().toLowerCase();
+    if (!normalizedQuery) {
+      return [];
+    }
+
+    return (Array.isArray(students) ? students : [])
+      .filter((student) => {
+        const name = getStudentFullName(student).toLowerCase();
+        const studentId = String(student?.id || '').toLowerCase();
+        return name.includes(normalizedQuery) || studentId.includes(normalizedQuery);
+      })
+      .sort((left, right) => getStudentFullName(left).localeCompare(getStudentFullName(right)))
+      .slice(0, 8);
+  }, [query, students]);
+
+  const handleClear = () => {
+    setQuery('');
+    setShowSuggestions(false);
+    Keyboard.dismiss();
+  };
+
+  const handleSelect = (student) => {
+    onToggleStudent(student.id);
+    setQuery('');
+    setShowSuggestions(false);
+    Keyboard.dismiss();
+  };
+
+  return (
+    <View style={styles.autocompleteContainer}>
+      <View style={styles.searchInputRow}>
+        <TextInput
+          style={styles.autocompleteTextInput}
+          placeholder="Search learner to link to this parent"
+          placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+          value={query}
+          onFocus={() => setShowSuggestions(true)}
+          onChangeText={(text) => {
+            setQuery(text);
+            setShowSuggestions(true);
+          }}
+          editable={!disabled}
+        />
+        {query.trim() ? (
+          <TouchableOpacity style={styles.clearSearchButton} onPress={handleClear} disabled={disabled}>
+            <Text style={styles.clearSearchButtonText}>×</Text>
+          </TouchableOpacity>
+        ) : null}
+      </View>
+
+      {showSuggestions && query.trim() ? (
+        <View style={styles.autocompleteResults}>
+          {suggestions.length > 0 ? (
+            <ScrollView nestedScrollEnabled style={styles.autocompleteScrollArea} keyboardShouldPersistTaps="handled">
+              {suggestions.map((student) => {
+                const isLinked = linkedIdSet.has(String(student?.id || '').trim());
+                return (
+                  <TouchableOpacity
+                    key={student.id}
+                    style={styles.autocompleteItem}
+                    onPress={() => handleSelect(student)}
+                    disabled={disabled}
+                  >
+                    <Text style={styles.autocompleteName}>{getStudentFullName(student)}</Text>
+                    <Text style={styles.autocompleteMeta}>
+                      {student.id} • {getClassroomName(student)}{isLinked ? ' • linked' : ''}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+          ) : (
+            <Text style={styles.autocompleteEmpty}>No learners match that search.</Text>
+          )}
+        </View>
+      ) : null}
+
+      <Text style={styles.selectedLearnerText}>
+        {linkedStudents.length > 0
+          ? 'Linked learners: tap a chip below to remove one if needed.'
+          : 'Search above to link one or more learners to this parent account.'}
+      </Text>
+
+      {linkedStudents.length > 0 ? (
+        <View style={styles.actionRow}>
+          {linkedStudents.map((student) => (
+            <TouchableOpacity
+              key={`linked-${student.id}`}
+              style={[styles.chipButton, styles.chipButtonSelected]}
+              onPress={() => onToggleStudent(student.id)}
+              disabled={disabled}
+            >
+              <Text style={[styles.chipButtonText, styles.selectedActionText]}>{getStudentFullName(student) || student.id} ×</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
 export default function App() {
   const [authReady, setAuthReady] = useState(false);
   const [authBusy, setAuthBusy] = useState(false);
@@ -532,6 +858,7 @@ export default function App() {
     displayName: 'Staff Member',
     role: 'teacher',
     permissions: DEFAULT_ROLE_PERMISSIONS.teacher,
+    linkedStudentIds: [],
   });
 
   useEffect(() => {
@@ -543,6 +870,7 @@ export default function App() {
         displayName: 'Staff Member',
         role: 'teacher',
         permissions: DEFAULT_ROLE_PERMISSIONS.teacher,
+        linkedStudentIds: [],
       });
       setAuthReady(true);
       setAuthBusy(false);
@@ -633,29 +961,34 @@ export default function App() {
             options={({ route }) => ({ title: route.params?.className || 'Class Folder' })}
           />
           <Stack.Screen
-            name="AttendanceRegister"
-            component={AttendanceRegisterScreen}
-            options={{ title: 'Attendance Register' }}
-          />
-          <Stack.Screen
-            name="AttendanceClassFolder"
-            component={AttendanceClassFolderScreen}
-            options={({ route }) => ({ title: route.params?.className || 'Attendance Folder' })}
-          />
-          <Stack.Screen
-            name="IncidentRegister"
-            component={IncidentRegisterScreen}
-            options={{ title: 'Incident Register' }}
-          />
-          <Stack.Screen
-            name="MedicineAdministration"
-            component={MedicineAdministrationScreen}
-            options={{ title: 'Medicine Log' }}
-          />
-          <Stack.Screen
             name="ComplianceReports"
             component={ComplianceReportsScreen}
             options={{ title: 'Compliance PDF Export' }}
+          />
+          <Stack.Screen
+            name="ComplianceDocuments"
+            component={ComplianceDocumentsScreen}
+            options={{ title: 'Compliance Documents' }}
+          />
+          <Stack.Screen
+            name="ComplianceDocumentFolder"
+            component={ComplianceDocumentFolderScreen}
+            options={({ route }) => ({ title: route.params?.folder?.label || 'Documents' })}
+          />
+          <Stack.Screen
+            name="Activities"
+            component={ActivitiesScreen}
+            options={{ title: 'Activities' }}
+          />
+          <Stack.Screen
+            name="LogActivity"
+            component={LogActivityScreen}
+            options={({ route }) => ({ title: route.params?.activity ? 'Edit Activity' : 'Log Activity' })}
+          />
+          <Stack.Screen
+            name="ActivityDetail"
+            component={ActivityDetailScreen}
+            options={({ route }) => ({ title: route.params?.activity?.aktiwiteitsName || 'Activity Details' })}
           />
         </Stack.Navigator>
       </NavigationContainer>
@@ -666,11 +999,9 @@ export default function App() {
 function HomeScreen({ navigation, onLogout, loginIdentity }) {
   const accessProfile = useAccessProfile();
   const roleLabel = formatRoleLabel(accessProfile.role);
+  const isParentAccount = isParentRole(accessProfile);
   const canEditStudents = hasPermission(accessProfile, 'canEditStudents');
   const canManageUsers = hasPermission(accessProfile, 'canManageUsers');
-  const canTakeAttendance = hasPermission(accessProfile, 'canTakeAttendance');
-  const canLogIncidents = hasPermission(accessProfile, 'canLogIncidents');
-  const canLogMedicine = hasPermission(accessProfile, 'canLogMedicine');
   const canExportReports = hasPermission(accessProfile, 'canExportReports');
 
   return (
@@ -688,14 +1019,44 @@ function HomeScreen({ navigation, onLogout, loginIdentity }) {
         </View>
 
         <Text style={styles.helperText}>
-          Logged in as {loginIdentity || 'Staff Member'} • {roleLabel} access. Student editing is {canEditStudents ? 'enabled' : 'view-only'} for this account.
+          {isParentAccount
+            ? `Logged in as ${loginIdentity || 'Parent'} • ${roleLabel} access. You can view your linked child records and update medical details.`
+            : `Logged in as ${loginIdentity || 'Staff Member'} • ${roleLabel} access. Student editing is ${canEditStudents ? 'enabled' : 'view-only'} for this account.`}
         </Text>
 
         <View style={styles.infoBox}>
-          <Text style={styles.infoText}>Access is tied to the signed-in Firebase user. You can change `role` or `permissions` later in Firestore under the `users` collection.</Text>
+          <Text style={styles.infoText}>
+            {isParentAccount
+              ? 'This parent account only shows the learner(s) linked to it. Attendance, incidents, and medicine history are read-only.'
+              : 'Access is tied to the signed-in Firebase user. You can change `role` or `permissions` later in Firestore under the `users` collection.'}
+          </Text>
         </View>
 
-        {canManageUsers ? (
+        <TouchableOpacity
+          style={styles.moduleCard}
+          onPress={() => navigation.navigate('StudentDirectory')}
+        >
+          <Text style={styles.moduleTitle}>{isParentAccount ? 'My Child/Children' : 'Students'}</Text>
+          <Text style={styles.moduleSubtitle}>
+            {isParentAccount
+              ? 'View your linked child profile, attendance history, medicine log, and incident history'
+              : 'Emergency profiles, contacts, and class-level quick actions for attendance, incidents, and medicine logs'}
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.moduleCard}
+          onPress={() => navigation.navigate('Activities')}
+        >
+          <Text style={styles.moduleTitle}>🎨 Activities</Text>
+          <Text style={styles.moduleSubtitle}>
+            {isParentAccount
+              ? 'View activities done in your child\'s class'
+              : 'Log daily classroom activities and export activity reports'}
+          </Text>
+        </TouchableOpacity>
+
+        {!isParentAccount && canManageUsers ? (
           <TouchableOpacity
             style={styles.moduleCard}
             onPress={() => navigation.navigate('ManageUsers')}
@@ -705,45 +1066,17 @@ function HomeScreen({ navigation, onLogout, loginIdentity }) {
           </TouchableOpacity>
         ) : null}
 
-        <TouchableOpacity
-          style={styles.moduleCard}
-          onPress={() => navigation.navigate('StudentDirectory')}
-        >
-          <Text style={styles.moduleTitle}>Students</Text>
-          <Text style={styles.moduleSubtitle}>Emergency profiles, contacts, and medical information</Text>
-        </TouchableOpacity>
-
-        {canTakeAttendance ? (
+        {!isParentAccount ? (
           <TouchableOpacity
             style={styles.moduleCard}
-            onPress={() => navigation.navigate('AttendanceRegister')}
+            onPress={() => navigation.navigate('ComplianceDocuments')}
           >
-            <Text style={styles.moduleTitle}>Digital Attendance Register</Text>
-            <Text style={styles.moduleSubtitle}>All learners default to Present. Mark Absent or Late only when needed.</Text>
+            <Text style={styles.moduleTitle}>📁 Compliance</Text>
+            <Text style={styles.moduleSubtitle}>Evacuation plans, DSD registration, health & safety, and other required ECD compliance documents</Text>
           </TouchableOpacity>
         ) : null}
 
-        {canLogIncidents ? (
-          <TouchableOpacity
-            style={styles.moduleCard}
-            onPress={() => navigation.navigate('IncidentRegister')}
-          >
-            <Text style={styles.moduleTitle}>Incident / Accident Register</Text>
-            <Text style={styles.moduleSubtitle}>Capture legally compliant, read-only incident records.</Text>
-          </TouchableOpacity>
-        ) : null}
-
-        {canLogMedicine ? (
-          <TouchableOpacity
-            style={styles.moduleCard}
-            onPress={() => navigation.navigate('MedicineAdministration')}
-          >
-            <Text style={styles.moduleTitle}>Medicine Administration Log</Text>
-            <Text style={styles.moduleSubtitle}>Record medication, dosage, staff member, and allergy warnings.</Text>
-          </TouchableOpacity>
-        ) : null}
-
-        {canExportReports ? (
+        {!isParentAccount && canExportReports ? (
           <TouchableOpacity
             style={styles.moduleCard}
             onPress={() => navigation.navigate('ComplianceReports')}
@@ -761,6 +1094,7 @@ function ManageUsersScreen({ navigation }) {
   const accessProfile = useAccessProfile();
   const canManageUsers = hasPermission(accessProfile, 'canManageUsers');
   const [userProfiles, setUserProfiles] = useState([]);
+  const [students, setStudents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState('');
   const [savingUid, setSavingUid] = useState('');
@@ -782,8 +1116,12 @@ function ManageUsersScreen({ navigation }) {
     try {
       setLoading(true);
       setErrorMessage('');
-      const data = await fetchUserAccessProfiles();
-      setUserProfiles(Array.isArray(data) ? data : []);
+      const [userData, studentData] = await Promise.all([
+        fetchUserAccessProfiles(),
+        loadStudentsFromDataStore(),
+      ]);
+      setUserProfiles(Array.isArray(userData) ? userData : []);
+      setStudents(Array.isArray(studentData) ? studentData : []);
     } catch (error) {
       setErrorMessage(error.message || 'Could not load staff access settings.');
     } finally {
@@ -863,6 +1201,35 @@ function ManageUsersScreen({ navigation }) {
     }
   };
 
+  const handleLinkedStudentToggle = async (userProfile, studentId) => {
+    if (!canManageUsers || !userProfile?.uid || !studentId) {
+      return;
+    }
+
+    const currentLinkedIds = Array.isArray(userProfile.linkedStudentIds) ? userProfile.linkedStudentIds : [];
+    const nextLinkedStudentIds = currentLinkedIds.includes(studentId)
+      ? currentLinkedIds.filter((currentId) => currentId !== studentId)
+      : [...currentLinkedIds, studentId];
+
+    try {
+      setSavingUid(userProfile.uid);
+      const updatedProfile = await updateUserAccessProfile(userProfile.uid, {
+        email: userProfile.email,
+        displayName: userProfile.displayName,
+        role: userProfile.role,
+        permissions: userProfile.permissions,
+        linkedStudentIds: nextLinkedStudentIds,
+      });
+      setUserProfiles((currentUsers) => currentUsers.map((currentUser) => (
+        currentUser.uid === userProfile.uid ? updatedProfile : currentUser
+      )));
+    } catch (error) {
+      Alert.alert('Update Failed', error.message || 'Could not link the learner to this parent account.');
+    } finally {
+      setSavingUid('');
+    }
+  };
+
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={styles.formContainer}>
@@ -933,6 +1300,19 @@ function ManageUsersScreen({ navigation }) {
               })}
             </View>
 
+            {userProfile.role === 'parent' ? (
+              <>
+                <Text style={styles.formSectionLabel}>Linked Learner(s)</Text>
+                <LinkedStudentPicker
+                  students={students}
+                  linkedStudentIds={userProfile.linkedStudentIds}
+                  onToggleStudent={(studentId) => handleLinkedStudentToggle(userProfile, studentId)}
+                  disabled={savingUid === userProfile.uid || !canManageUsers}
+                />
+                <Text style={styles.tapHint}>Parent accounts only see the learners selected here.</Text>
+              </>
+            ) : null}
+
             {savingUid === userProfile.uid ? <Text style={styles.statusText}>Saving access changes...</Text> : null}
           </View>
         ))}
@@ -943,8 +1323,10 @@ function ManageUsersScreen({ navigation }) {
 
 function StudentDirectoryScreen({ navigation }) {
   const accessProfile = useAccessProfile();
+  const isParentAccount = isParentRole(accessProfile);
   const canEditStudents = hasPermission(accessProfile, 'canEditStudents');
   const [students, setStudents] = useState([]);
+  const [selectedStudentId, setSelectedStudentId] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState('');
@@ -972,9 +1354,14 @@ function StudentDirectoryScreen({ navigation }) {
     }, [fetchStudents]),
   );
 
+  const visibleStudentPool = useMemo(
+    () => filterStudentsByAccess(students, accessProfile),
+    [students, accessProfile],
+  );
+
   const groupedStudents = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
-    const filteredStudents = students.filter((student) => {
+    const filteredStudents = visibleStudentPool.filter((student) => {
       const name = getStudentFullName(student).toLowerCase();
       const studentId = String(student.id || '').toLowerCase();
       const className = getClassroomName(student).toLowerCase();
@@ -994,13 +1381,19 @@ function StudentDirectoryScreen({ navigation }) {
       className,
       learners: learners.sort((left, right) => getStudentFullName(left).localeCompare(getStudentFullName(right))),
     }));
-  }, [students, searchQuery]);
+  }, [visibleStudentPool, searchQuery]);
+
+  const orderedVisibleStudents = useMemo(
+    () => [...visibleStudentPool].sort((left, right) => getStudentFullName(left).localeCompare(getStudentFullName(right))),
+    [visibleStudentPool],
+  );
 
   return (
     <SafeAreaView style={styles.container}>
-      <View style={styles.screenContainer}>
-        <Text style={styles.title}>Emergency Info</Text>
-        <Text style={styles.subtitle}>Student Directory by Class</Text>
+      <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
+        <View style={styles.screenContainer}>
+<Text style={styles.title}>{isParentAccount ? 'My Child/Children' : 'Emergency Info'}</Text>
+        <Text style={styles.subtitle}>{isParentAccount ? 'Your linked learner records' : 'Student Directory by Class'}</Text>
 
         {canEditStudents ? (
           <TouchableOpacity
@@ -1011,50 +1404,106 @@ function StudentDirectoryScreen({ navigation }) {
           </TouchableOpacity>
         ) : (
           <View style={styles.infoBox}>
-            <Text style={styles.infoText}>View-only student access: only principal/admin users can add or edit learners.</Text>
+            <Text style={styles.infoText}>
+              {isParentAccount
+                ? 'This parent view only shows the learner(s) linked to your account. You can update medical/contact information from the learner profile.'
+                : 'View-only student access: only principal/admin users can add or edit learners.'}
+            </Text>
           </View>
         )}
 
-        <TextInput
-          style={styles.searchInput}
-          placeholder="Search any learner, ID, or class"
-          value={searchQuery}
-          onChangeText={setSearchQuery}
+        <StudentAutocomplete
+          students={visibleStudentPool}
+          selectedStudentId={selectedStudentId}
+          onSelect={setSelectedStudentId}
+          onStudentChosen={(student) => {
+            if (isParentAccount) {
+              navigation.navigate('EmergencyProfile', { student });
+              return;
+            }
+
+            navigation.navigate('StudentClassFolder', {
+              className: getClassroomName(student),
+              focusStudentId: String(student?.id || '').trim(),
+              focusStudentName: getStudentFullName(student),
+            });
+          }}
+          placeholder={isParentAccount ? 'Quick search your child' : 'Quick learner search across all classes'}
+          helperText={isParentAccount ? 'Start typing your child name for instant access.' : 'Start typing a learner name and tap the matching result for instant access.'}
         />
 
         {loading ? <Text style={styles.statusText}>Loading students...</Text> : null}
         {errorMessage ? <Text style={styles.errorText}>{errorMessage}</Text> : null}
+        {!loading && !errorMessage && isParentAccount && visibleStudentPool.length === 0 ? (
+          <Text style={styles.statusText}>No learner has been linked to this parent account yet. Ask the principal to open Staff Access and select the child for this parent.</Text>
+        ) : null}
 
-        <ScrollView contentContainerStyle={styles.listContent}>
-          {!loading && !errorMessage && groupedStudents.length === 0 ? (
-            <Text style={styles.statusText}>No learners found for this search.</Text>
-          ) : groupedStudents.map((group) => (
-            <TouchableOpacity
-              key={group.className}
-              style={styles.moduleCard}
-              onPress={() => navigation.navigate('StudentClassFolder', { className: group.className })}
-            >
-              <View style={styles.folderHeaderRow}>
-                <View style={styles.folderTextWrap}>
-                  <Text style={styles.moduleTitle}>📁 {group.className}</Text>
-                  <Text style={styles.moduleSubtitle}>{group.learners.length} learners • Tap to open</Text>
+          <ScrollView contentContainerStyle={styles.listContent} keyboardShouldPersistTaps="handled">
+            {!loading && !errorMessage && isParentAccount ? (
+              orderedVisibleStudents.length === 0 ? (
+                <Text style={styles.statusText}>No linked learner found for this parent account.</Text>
+              ) : orderedVisibleStudents.map((student) => (
+                <TouchableOpacity
+                  key={student.id}
+                  style={styles.studentItem}
+                  onPress={() => navigation.navigate('EmergencyProfile', { student })}
+                >
+                  <View>
+                    <Text style={styles.studentName}>{getStudentFullName(student)}</Text>
+                    <Text style={styles.studentClassText}>{student.id} • {getClassroomName(student)}</Text>
+                    <Text style={styles.tapHint}>Tap to open your child record</Text>
+                  </View>
+                </TouchableOpacity>
+              ))
+            ) : !loading && !errorMessage && groupedStudents.length === 0 ? (
+              <Text style={styles.statusText}>No learners found for this search.</Text>
+            ) : groupedStudents.map((group) => (
+              <TouchableOpacity
+                key={group.className}
+                style={styles.moduleCard}
+                onPress={() => navigation.navigate('StudentClassFolder', { className: group.className })}
+              >
+                <View style={styles.folderHeaderRow}>
+                  <View style={styles.folderTextWrap}>
+                    <Text style={styles.moduleTitle}>📁 {group.className}</Text>
+                    <Text style={styles.moduleSubtitle}>{group.learners.length} learners • Tap to open</Text>
+                  </View>
+                  <Text style={styles.folderToggleText}>›</Text>
                 </View>
-                <Text style={styles.folderToggleText}>›</Text>
-              </View>
-            </TouchableOpacity>
-          ))}
-        </ScrollView>
-      </View>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        </View>
+      </TouchableWithoutFeedback>
     </SafeAreaView>
   );
 }
 
 function StudentClassFolderScreen({ route, navigation }) {
+  const accessProfile = useAccessProfile();
   const className = route.params?.className || 'Class Folder';
+  const focusStudentId = String(route.params?.focusStudentId || '').trim();
+  const focusStudentName = String(route.params?.focusStudentName || '').trim();
+  const canTakeAttendance = hasPermission(accessProfile, 'canTakeAttendance');
+  const canLogIncidents = hasPermission(accessProfile, 'canLogIncidents');
+  const canLogMedicine = hasPermission(accessProfile, 'canLogMedicine');
   const [students, setStudents] = useState([]);
+  const [attendanceEntries, setAttendanceEntries] = useState([]);
+  const [savingAttendanceId, setSavingAttendanceId] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState('');
+  const [incidentStudent, setIncidentStudent] = useState(null);
+  const [incidentLocation, setIncidentLocation] = useState('Playground');
+  const [incidentDescription, setIncidentDescription] = useState('');
+  const [incidentActionTaken, setIncidentActionTaken] = useState('');
+  const [incidentWitness, setIncidentWitness] = useState('');
+  const [incidentSaving, setIncidentSaving] = useState(false);
+  const [medicineStudent, setMedicineStudent] = useState(null);
+  const [medicineName, setMedicineName] = useState('');
+  const [medicineDosage, setMedicineDosage] = useState('');
+  const [medicineStaffMember, setMedicineStaffMember] = useState('');
+  const [medicineSaving, setMedicineSaving] = useState(false);
 
   const fetchStudents = useCallback(async () => {
     try {
@@ -1062,6 +1511,8 @@ function StudentClassFolderScreen({ route, navigation }) {
       setErrorMessage('');
       const data = await loadStudentsFromDataStore();
       setStudents(Array.isArray(data) ? data : []);
+      const attendanceData = await loadAttendanceFromDataStore(TODAY, Array.isArray(data) ? data : []);
+      setAttendanceEntries(Array.isArray(attendanceData) ? attendanceData : []);
     } catch (error) {
       setErrorMessage(error.message || 'Could not load the class folder.');
     } finally {
@@ -1079,21 +1530,198 @@ function StudentClassFolderScreen({ route, navigation }) {
     }, [fetchStudents]),
   );
 
+  useEffect(() => {
+    if (focusStudentId || focusStudentName) {
+      setSearchQuery(focusStudentId || focusStudentName);
+    }
+  }, [focusStudentId, focusStudentName]);
+
   const visibleStudents = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
     return students.filter((student) => {
       const matchesClass = getClassroomName(student) === className;
+      const allowedStudent = canAccessStudent(accessProfile, student);
       const studentName = getStudentFullName(student).toLowerCase();
       const studentId = String(student.id || '').toLowerCase();
-      return matchesClass && (!query || studentName.includes(query) || studentId.includes(query));
+      return allowedStudent && matchesClass && (!query || studentName.includes(query) || studentId.includes(query));
     });
-  }, [students, searchQuery, className]);
+  }, [students, searchQuery, className, accessProfile]);
+
+  const attendanceByStudentId = useMemo(
+    () => new Map(attendanceEntries.map((entry) => [String(entry.studentId || '').trim(), entry])),
+    [attendanceEntries],
+  );
+
+  const defaultAttendanceEntryForStudent = useCallback((student) => ({
+    id: `${TODAY}_${String(student?.id || '').trim()}`,
+    date: TODAY,
+    studentId: String(student?.id || '').trim(),
+    studentName: getStudentFullName(student),
+    className: getClassroomName(student),
+    status: 'Present',
+    reason: '',
+  }), []);
+
+  const getAttendanceEntryForStudent = useCallback((student) => {
+    const studentId = String(student?.id || '').trim();
+    return attendanceByStudentId.get(studentId) || defaultAttendanceEntryForStudent(student);
+  }, [attendanceByStudentId, defaultAttendanceEntryForStudent]);
+
+  const statusStyleFor = (status) => {
+    if (status === 'Late') {
+      return styles.statusBadgeLate;
+    }
+
+    if (status === 'Absent') {
+      return styles.statusBadgeAbsent;
+    }
+
+    return styles.statusBadgePresent;
+  };
+
+  const upsertAttendanceEntry = useCallback((nextEntry) => {
+    setAttendanceEntries((currentEntries) => {
+      const nextEntriesMap = new Map(currentEntries.map((entry) => [String(entry.studentId || '').trim(), entry]));
+      nextEntriesMap.set(String(nextEntry.studentId || '').trim(), nextEntry);
+      return Array.from(nextEntriesMap.values());
+    });
+  }, []);
+
+  const handleQuickAttendanceStatus = async (student, status) => {
+    if (!canTakeAttendance) {
+      Alert.alert('Access Restricted', 'Your account can view attendance but cannot change it.');
+      return;
+    }
+
+    const currentEntry = getAttendanceEntryForStudent(student);
+    const reason = status === 'Absent'
+      ? 'Marked absent in student folder.'
+      : status === 'Late'
+        ? 'Marked late in student folder.'
+        : '';
+
+    try {
+      setSavingAttendanceId(String(student?.id || '').trim());
+      const savedEntry = await saveAttendanceRecord(TODAY, currentEntry, status, reason);
+      upsertAttendanceEntry(savedEntry);
+    } catch (error) {
+      Alert.alert('Update Failed', error.message || 'Could not update attendance.');
+    } finally {
+      setSavingAttendanceId('');
+    }
+  };
+
+  const openIncidentModal = (student) => {
+    if (!canLogIncidents) {
+      Alert.alert('Access Restricted', 'Your account can view incidents but cannot create them.');
+      return;
+    }
+
+    setIncidentStudent(student);
+    setIncidentLocation('Playground');
+    setIncidentDescription('');
+    setIncidentActionTaken('');
+    setIncidentWitness('');
+  };
+
+  const closeIncidentModal = () => {
+    setIncidentStudent(null);
+    setIncidentDescription('');
+    setIncidentActionTaken('');
+    setIncidentWitness('');
+  };
+
+  const handleSaveIncident = async () => {
+    if (!incidentStudent) {
+      return;
+    }
+
+    if (!incidentLocation.trim() || !incidentDescription.trim() || !incidentActionTaken.trim() || !incidentWitness.trim()) {
+      Alert.alert('Missing Details', 'Please complete location, description, action taken, and witness.');
+      return;
+    }
+
+    try {
+      setIncidentSaving(true);
+      await saveIncidentRecord({
+        studentId: String(incidentStudent.id || '').trim(),
+        location: incidentLocation.trim(),
+        description: incidentDescription.trim(),
+        actionTaken: incidentActionTaken.trim(),
+        witness: incidentWitness.trim(),
+      }, incidentStudent);
+
+      closeIncidentModal();
+      Alert.alert('Saved', 'Incident recorded for this learner.');
+    } catch (error) {
+      Alert.alert('Error', error.message || 'Could not save the incident.');
+    } finally {
+      setIncidentSaving(false);
+    }
+  };
+
+  const openMedicineModal = (student) => {
+    if (!canLogMedicine) {
+      Alert.alert('Access Restricted', 'Your account can view medicine logs but cannot create them.');
+      return;
+    }
+
+    setMedicineStudent(student);
+    setMedicineName('');
+    setMedicineDosage('');
+    setMedicineStaffMember('');
+  };
+
+  const closeMedicineModal = () => {
+    setMedicineStudent(null);
+    setMedicineName('');
+    setMedicineDosage('');
+    setMedicineStaffMember('');
+  };
+
+  const handleSaveMedicine = async () => {
+    if (!medicineStudent) {
+      return;
+    }
+
+    if (!medicineName.trim() || !medicineDosage.trim() || !medicineStaffMember.trim()) {
+      Alert.alert('Missing Details', 'Please complete medication, dosage, and staff member.');
+      return;
+    }
+
+    try {
+      setMedicineSaving(true);
+      const savedEntry = await saveMedicineLogRecord({
+        studentId: String(medicineStudent.id || '').trim(),
+        medicationName: medicineName.trim(),
+        dosage: medicineDosage.trim(),
+        staffMember: medicineStaffMember.trim(),
+      }, medicineStudent);
+
+      closeMedicineModal();
+      if (savedEntry?.allergyWarning) {
+        Alert.alert('WARNING', 'This medication matches a recorded allergy. Please double-check before administration.');
+      } else {
+        Alert.alert('Saved', 'Medicine logged for this learner.');
+      }
+    } catch (error) {
+      Alert.alert('Error', error.message || 'Could not save the medicine log.');
+    } finally {
+      setMedicineSaving(false);
+    }
+  };
+
+  const activeMedicineAllergyWarning = useMemo(
+    () => doesMedicationTriggerAllergy(medicineName, medicineStudent?.allergies || ''),
+    [medicineName, medicineStudent],
+  );
 
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={styles.formContainer}>
         <Text style={styles.title}>📁 {className}</Text>
-        <Text style={styles.subtitle}>Students in this class</Text>
+        <Text style={styles.subtitle}>Students in this class with quick daily logging</Text>
+        <Text style={styles.helperText}>Use each learner card to set attendance status and quickly log incidents or medicine without leaving Students.</Text>
 
         <TextInput
           style={styles.searchInput}
@@ -1108,20 +1736,190 @@ function StudentClassFolderScreen({ route, navigation }) {
           <Text style={styles.statusText}>No learners found in this class.</Text>
         ) : null}
 
-        {visibleStudents.map((student) => (
-          <TouchableOpacity
-            key={student.id}
-            style={styles.studentItem}
-            onPress={() => navigation.navigate('EmergencyProfile', { student })}
-          >
-            <View>
-              <Text style={styles.studentName}>{getStudentFullName(student)}</Text>
-              <Text style={styles.studentClassText}>{student.id} • {getClassroomName(student)}</Text>
-              <Text style={styles.tapHint}>Tap for emergency information</Text>
+        {visibleStudents.map((student) => {
+          const attendanceEntry = getAttendanceEntryForStudent(student);
+          const isSavingThisStudent = savingAttendanceId === String(student.id || '').trim();
+          const isParentMarkedAbsent = attendanceEntry.status === 'Absent' && (
+            attendanceEntry.parentReportedAbsent
+            || String(attendanceEntry.reason || '').toLowerCase().includes(PARENT_ABSENT_REASON.toLowerCase())
+          );
+
+          return (
+            <View key={student.id} style={styles.sectionCard}>
+              <View style={styles.itemHeaderRow}>
+                <TouchableOpacity onPress={() => navigation.navigate('EmergencyProfile', { student })}>
+                  <Text style={styles.studentName}>{getStudentFullName(student)}</Text>
+                  <Text style={styles.studentClassText}>{student.id} • {getClassroomName(student)}</Text>
+                  {isParentMarkedAbsent ? <Text style={styles.tapHint}>Parent marked this learner absent today.</Text> : null}
+                </TouchableOpacity>
+                <View style={[styles.statusBadge, statusStyleFor(attendanceEntry.status)]}>
+                  <Text style={styles.statusBadgeText}>{attendanceEntry.status}</Text>
+                </View>
+              </View>
+
+              <View style={styles.actionRow}>
+                {[
+                  { label: 'Late', value: 'Late' },
+                  { label: 'Absent', value: 'Absent' },
+                  { label: 'Clear', value: 'Present' },
+                ].map(({ label, value }) => (
+                  <TouchableOpacity
+                    key={`${student.id}-${value}`}
+                    style={[
+                      styles.statusActionButton,
+                      attendanceEntry.status === value && styles.statusActionButtonSelected,
+                    ]}
+                    onPress={() => handleQuickAttendanceStatus(student, value)}
+                    disabled={isSavingThisStudent || !canTakeAttendance}
+                  >
+                    <Text style={[styles.statusActionButtonText, attendanceEntry.status === value && styles.selectedActionText]}>{label}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
+              <View style={styles.quickLogRow}>
+                <TouchableOpacity
+                  style={[styles.quickLogButton, !canLogIncidents && styles.saveStudentButtonDisabled]}
+                  onPress={() => openIncidentModal(student)}
+                  disabled={!canLogIncidents}
+                >
+                  <Text style={styles.quickLogButtonText}>Log Incident</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[styles.quickLogButton, !canLogMedicine && styles.saveStudentButtonDisabled]}
+                  onPress={() => openMedicineModal(student)}
+                  disabled={!canLogMedicine}
+                >
+                  <Text style={styles.quickLogButtonText}>Log Medicine</Text>
+                </TouchableOpacity>
+              </View>
+
+              {isSavingThisStudent ? <Text style={styles.statusText}>Saving attendance...</Text> : null}
             </View>
-          </TouchableOpacity>
-        ))}
+          );
+        })}
       </ScrollView>
+
+      <Modal
+        visible={Boolean(incidentStudent)}
+        transparent
+        animationType="fade"
+        onRequestClose={closeIncidentModal}
+      >
+        <TouchableWithoutFeedback onPress={closeIncidentModal}>
+          <View style={styles.modalBackdrop}>
+            <TouchableWithoutFeedback onPress={() => {}}>
+              <View style={styles.modalCard}>
+                <Text style={styles.modalTitle}>Log Incident</Text>
+                <Text style={styles.modalText}>{incidentStudent ? getStudentFullName(incidentStudent) : ''}</Text>
+
+                <TextInput
+                  style={styles.formInput}
+                  placeholder="Location"
+                  placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+                  value={incidentLocation}
+                  onChangeText={setIncidentLocation}
+                />
+                <TextInput
+                  style={[styles.formInput, styles.reasonInput]}
+                  placeholder="Description"
+                  placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+                  value={incidentDescription}
+                  onChangeText={setIncidentDescription}
+                  multiline
+                />
+                <TextInput
+                  style={styles.formInput}
+                  placeholder="Action Taken"
+                  placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+                  value={incidentActionTaken}
+                  onChangeText={setIncidentActionTaken}
+                />
+                <TextInput
+                  style={styles.formInput}
+                  placeholder="Witness"
+                  placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+                  value={incidentWitness}
+                  onChangeText={setIncidentWitness}
+                />
+
+                <View style={styles.modalButtonsRow}>
+                  <TouchableOpacity style={styles.modalButtonSecondary} onPress={closeIncidentModal}>
+                    <Text style={styles.modalButtonSecondaryText}>Cancel</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.modalButtonPrimary, incidentSaving && styles.saveStudentButtonDisabled]}
+                    onPress={handleSaveIncident}
+                    disabled={incidentSaving}
+                  >
+                    <Text style={styles.modalButtonPrimaryText}>{incidentSaving ? 'Saving...' : 'Save'}</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </TouchableWithoutFeedback>
+          </View>
+        </TouchableWithoutFeedback>
+      </Modal>
+
+      <Modal
+        visible={Boolean(medicineStudent)}
+        transparent
+        animationType="fade"
+        onRequestClose={closeMedicineModal}
+      >
+        <TouchableWithoutFeedback onPress={closeMedicineModal}>
+          <View style={styles.modalBackdrop}>
+            <TouchableWithoutFeedback onPress={() => {}}>
+              <View style={styles.modalCard}>
+                <Text style={styles.modalTitle}>Log Medicine</Text>
+                <Text style={styles.modalText}>{medicineStudent ? getStudentFullName(medicineStudent) : ''}</Text>
+
+                {activeMedicineAllergyWarning ? (
+                  <View style={styles.warningCard}>
+                    <Text style={styles.warningText}>WARNING: Medication may conflict with recorded allergy.</Text>
+                  </View>
+                ) : null}
+
+                <TextInput
+                  style={styles.formInput}
+                  placeholder="Medication Name"
+                  placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+                  value={medicineName}
+                  onChangeText={setMedicineName}
+                />
+                <TextInput
+                  style={styles.formInput}
+                  placeholder="Dosage"
+                  placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+                  value={medicineDosage}
+                  onChangeText={setMedicineDosage}
+                />
+                <TextInput
+                  style={styles.formInput}
+                  placeholder="Staff Member"
+                  placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+                  value={medicineStaffMember}
+                  onChangeText={setMedicineStaffMember}
+                />
+
+                <View style={styles.modalButtonsRow}>
+                  <TouchableOpacity style={styles.modalButtonSecondary} onPress={closeMedicineModal}>
+                    <Text style={styles.modalButtonSecondaryText}>Cancel</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.modalButtonPrimary, medicineSaving && styles.saveStudentButtonDisabled]}
+                    onPress={handleSaveMedicine}
+                    disabled={medicineSaving}
+                  >
+                    <Text style={styles.modalButtonPrimaryText}>{medicineSaving ? 'Saving...' : 'Save'}</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </TouchableWithoutFeedback>
+          </View>
+        </TouchableWithoutFeedback>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -1129,13 +1927,50 @@ function StudentClassFolderScreen({ route, navigation }) {
 function EmergencyProfileScreen({ route, navigation }) {
   const accessProfile = useAccessProfile();
   const canEditStudents = hasPermission(accessProfile, 'canEditStudents');
+  const canEditOwnChildMedicalInfo = hasPermission(accessProfile, 'canEditOwnChildMedicalInfo');
+  const isParentAccount = isParentRole(accessProfile);
   const { student } = route.params;
   const [isMedicalAidVisible, setIsMedicalAidVisible] = useState(false);
   const [isPinModalVisible, setIsPinModalVisible] = useState(false);
   const [pinInput, setPinInput] = useState('');
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [parentAbsentSaving, setParentAbsentSaving] = useState(false);
+  const [showParentAbsentDatePicker, setShowParentAbsentDatePicker] = useState(false);
+  const [attendanceHistory, setAttendanceHistory] = useState([]);
+  const [incidentHistory, setIncidentHistory] = useState([]);
+  const [medicineHistory, setMedicineHistory] = useState([]);
   const emergencyContacts = Array.isArray(student.emergencyContacts) ? student.emergencyContacts : [];
   const allergies = String(student.allergies || '').trim().toLowerCase();
   const hasCriticalAllergy = allergies && allergies !== 'none' && allergies !== 'no known allergies';
+  const canOpenThisStudent = canAccessStudent(accessProfile, student);
+  const canUpdateMedicalInfo = canEditStudents || (canEditOwnChildMedicalInfo && canOpenThisStudent);
+  const currentYear = parseInt(TODAY.split('-')[0], 10);
+  const currentMonth = parseInt(TODAY.split('-')[1], 10);
+  const currentDay = parseInt(TODAY.split('-')[2], 10);
+  const [parentAbsentYear, setParentAbsentYear] = useState(String(currentYear));
+  const [parentAbsentMonth, setParentAbsentMonth] = useState(String(currentMonth).padStart(2, '0'));
+  const [parentAbsentDay, setParentAbsentDay] = useState(String(currentDay).padStart(2, '0'));
+  const parentAbsentDate = `${parentAbsentYear}-${parentAbsentMonth}-${parentAbsentDay}`;
+  const parentAbsentEntry = attendanceHistory.find(
+    (entry) => String(entry.date || '').trim() === parentAbsentDate && String(entry.status || '').trim() === 'Absent',
+  );
+  const hasParentMarkedAbsentForDate = Boolean(parentAbsentEntry?.parentReportedAbsent);
+
+  const refreshParentAttendanceHistory = useCallback(async () => {
+    if (!isParentAccount || !student?.id) {
+      setAttendanceHistory([]);
+      return;
+    }
+
+    const refreshedAttendance = await fetchAllAttendanceFromFirestore();
+    const normalizedStudentId = String(student.id || '').trim();
+    setAttendanceHistory(
+      filterRecordsByAccess(refreshedAttendance, accessProfile).filter((entry) => {
+        const entryStatus = String(entry.status || '').trim();
+        return String(entry.studentId || '').trim() === normalizedStudentId && ['Absent', 'Late'].includes(entryStatus);
+      }),
+    );
+  }, [isParentAccount, student?.id, accessProfile]);
 
   const handleDial = async (phoneNumber) => {
     if (!phoneNumber) {
@@ -1179,17 +2014,165 @@ function EmergencyProfileScreen({ route, navigation }) {
     setIsPinModalVisible(false);
   };
 
+  const handleParentReportAbsentForDate = () => {
+    if (!isParentAccount || !canOpenThisStudent || !student?.id) {
+      return;
+    }
+
+    if (parentAbsentDate < TODAY) {
+      Alert.alert('Date Not Allowed', 'Please choose today or a future date for absence notices.');
+      return;
+    }
+
+    Alert.alert(
+      'Mark Child Absent',
+      `Confirm that ${getStudentFullName(student)} will be absent on ${parentAbsentDate}?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Confirm',
+          onPress: async () => {
+            try {
+              setParentAbsentSaving(true);
+
+              const parentReason = `Parent marked absent in app for ${parentAbsentDate}.`;
+              const attendanceEntry = {
+                id: `${parentAbsentDate}_${String(student.id || '').trim()}`,
+                date: parentAbsentDate,
+                studentId: String(student.id || '').trim(),
+                studentName: getStudentFullName(student),
+                className: getClassroomName(student),
+                status: 'Absent',
+                reason: parentReason,
+                parentReportedAbsent: true,
+                parentReportedAt: new Date().toISOString(),
+                parentReportedByUid: String(accessProfile?.uid || '').trim(),
+                parentReportedByEmail: String(accessProfile?.email || '').trim(),
+              };
+
+              await saveAttendanceRecord(parentAbsentDate, attendanceEntry, 'Absent', parentReason);
+              await refreshParentAttendanceHistory();
+
+              Alert.alert('Saved', `Your absence notice for ${parentAbsentDate} was shared with staff.`);
+            } catch (error) {
+              Alert.alert('Could Not Save', error.message || 'Could not send the absence notice.');
+            } finally {
+              setParentAbsentSaving(false);
+            }
+          },
+        },
+      ],
+    );
+  };
+
+  const handleParentUndoAbsentForDate = () => {
+    if (!isParentAccount || !canOpenThisStudent || !student?.id || !hasParentMarkedAbsentForDate) {
+      return;
+    }
+
+    Alert.alert(
+      'Undo Absent Notice',
+      `Remove absence notice for ${getStudentFullName(student)} on ${parentAbsentDate}?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Undo',
+          onPress: async () => {
+            try {
+              setParentAbsentSaving(true);
+
+              const fallbackEntry = {
+                id: `${parentAbsentDate}_${String(student.id || '').trim()}`,
+                date: parentAbsentDate,
+                studentId: String(student.id || '').trim(),
+                studentName: getStudentFullName(student),
+                className: getClassroomName(student),
+                status: 'Absent',
+                reason: '',
+                parentReportedAbsent: true,
+              };
+
+              await saveAttendanceRecord(parentAbsentDate, parentAbsentEntry || fallbackEntry, 'Present', '');
+              await refreshParentAttendanceHistory();
+
+              Alert.alert('Updated', `Absence notice for ${parentAbsentDate} was removed.`);
+            } catch (error) {
+              Alert.alert('Could Not Undo', error.message || 'Could not remove the absence notice.');
+            } finally {
+              setParentAbsentSaving(false);
+            }
+          },
+        },
+      ],
+    );
+  };
+
+  useEffect(() => {
+    if (!canOpenThisStudent) {
+      Alert.alert('Access Restricted', 'This account can only open the learner profile linked to it.');
+      navigation.goBack();
+    }
+  }, [canOpenThisStudent, navigation]);
+
+  useEffect(() => {
+    let isActive = true;
+
+    const loadParentHistory = async () => {
+      if (!isParentAccount || !student?.id) {
+        setAttendanceHistory([]);
+        setIncidentHistory([]);
+        setMedicineHistory([]);
+        setHistoryLoading(false);
+        return;
+      }
+
+      try {
+        setHistoryLoading(true);
+        const [attendanceData, incidentData, medicineData] = await Promise.all([
+          fetchAllAttendanceFromFirestore(),
+          loadIncidentsFromDataStore(),
+          loadMedicineLogsFromDataStore(),
+        ]);
+
+        if (!isActive) {
+          return;
+        }
+
+        const normalizedStudentId = String(student.id || '').trim();
+        setAttendanceHistory(
+          filterRecordsByAccess(attendanceData, accessProfile).filter((entry) => {
+            const entryStatus = String(entry.status || '').trim();
+            return String(entry.studentId || '').trim() === normalizedStudentId && ['Absent', 'Late'].includes(entryStatus);
+          }),
+        );
+        setIncidentHistory(filterRecordsByAccess(incidentData, accessProfile).filter((entry) => String(entry.studentId || '').trim() === normalizedStudentId));
+        setMedicineHistory(filterRecordsByAccess(medicineData, accessProfile).filter((entry) => String(entry.studentId || '').trim() === normalizedStudentId));
+      } catch (error) {
+        console.warn('Could not load parent history view.', error);
+      } finally {
+        if (isActive) {
+          setHistoryLoading(false);
+        }
+      }
+    };
+
+    loadParentHistory();
+    return () => {
+      isActive = false;
+    };
+  }, [isParentAccount, student?.id, accessProfile]);
+
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={styles.formContainer}>
         <Text style={styles.profileName}>{getStudentFullName(student)}</Text>
 
-        {canEditStudents ? (
+        {canUpdateMedicalInfo ? (
           <TouchableOpacity
             style={styles.editStudentButton}
-            onPress={() => navigation.navigate('StudentForm', { mode: 'edit', student })}
+            onPress={() => navigation.navigate('StudentForm', { mode: canEditStudents ? 'edit' : 'parent-edit', student })}
           >
-            <Text style={styles.editStudentButtonText}>Edit Student</Text>
+            <Text style={styles.editStudentButtonText}>{canEditStudents ? 'Edit Student' : 'Update Medical Info'}</Text>
           </TouchableOpacity>
         ) : (
           <View style={styles.infoBox}>
@@ -1224,6 +2207,59 @@ function EmergencyProfileScreen({ route, navigation }) {
           <Text style={styles.allergyText}>{student.allergies || 'None reported'}</Text>
         </View>
 
+        {isParentAccount ? (
+          <View style={styles.card}>
+            <Text style={styles.sectionTitle}>Attendance Notice</Text>
+            <Text style={styles.infoText}>Choose a date and submit an absence notice so staff can see it in the attendance register.</Text>
+            <View style={styles.compactDateFieldWrapper}>
+              <Text style={styles.compactDateLabel}>Absent Date</Text>
+              <TouchableOpacity
+                style={styles.compactDateField}
+                onPress={() => setShowParentAbsentDatePicker(true)}
+              >
+                <Text style={styles.compactDateFieldText}>{formatCompactDateDisplay(parentAbsentYear, parentAbsentMonth, parentAbsentDay)}</Text>
+              </TouchableOpacity>
+            </View>
+            <TouchableOpacity
+              style={[styles.editStudentButton, hasParentMarkedAbsentForDate && styles.moduleCardDisabled]}
+              onPress={handleParentReportAbsentForDate}
+              disabled={parentAbsentSaving || hasParentMarkedAbsentForDate}
+            >
+              <Text style={styles.editStudentButtonText}>
+                {parentAbsentSaving
+                  ? 'Saving absence...'
+                  : hasParentMarkedAbsentForDate
+                    ? 'Absent for selected date submitted'
+                    : 'Child Will Be Absent'}
+              </Text>
+            </TouchableOpacity>
+            {hasParentMarkedAbsentForDate ? (
+              <>
+                <Text style={styles.tapHint}>Staff can now see this for {parentAbsentDate} under attendance.</Text>
+                <TouchableOpacity
+                  style={styles.undoAbsentButton}
+                  onPress={handleParentUndoAbsentForDate}
+                  disabled={parentAbsentSaving}
+                >
+                  <Text style={styles.undoAbsentButtonText}>{parentAbsentSaving ? 'Updating...' : 'Undo Absent for Selected Date'}</Text>
+                </TouchableOpacity>
+              </>
+            ) : null}
+            <CompactDatePickerModal
+              visible={showParentAbsentDatePicker}
+              onClose={() => setShowParentAbsentDatePicker(false)}
+              onDateSelect={(y, m, d) => {
+                setParentAbsentYear(y);
+                setParentAbsentMonth(m);
+                setParentAbsentDay(d);
+              }}
+              currentYear={parseInt(parentAbsentYear, 10)}
+              currentMonth={parentAbsentMonth}
+              currentDay={parentAbsentDay}
+            />
+          </View>
+        ) : null}
+
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>Medical Aid Vault</Text>
           <Text style={styles.vaultText}>
@@ -1239,6 +2275,43 @@ function EmergencyProfileScreen({ route, navigation }) {
             </Text>
           </TouchableOpacity>
         </View>
+
+        {isParentAccount ? (
+          <>
+            <Text style={styles.sectionTitle}>Attendance History</Text>
+            {historyLoading ? <Text style={styles.statusText}>Loading attendance history...</Text> : null}
+            {!historyLoading && attendanceHistory.length === 0 ? <Text style={styles.statusText}>No late or absent records yet.</Text> : null}
+            {attendanceHistory.slice(0, 12).map((entry) => (
+              <View key={entry.id} style={styles.timelineCard}>
+                <Text style={styles.studentName}>{entry.status}</Text>
+                <Text style={styles.timelineMeta}>{entry.date || formatDateTime(entry.createdAt)} • {entry.className || getClassroomName(student)}</Text>
+                {entry.reason ? <Text style={styles.timelineText}>Reason: {entry.reason}</Text> : null}
+              </View>
+            ))}
+
+            <Text style={styles.sectionTitle}>Incident History</Text>
+            {!historyLoading && incidentHistory.length === 0 ? <Text style={styles.statusText}>No incident records yet.</Text> : null}
+            {incidentHistory.slice(0, 12).map((entry) => (
+              <View key={entry.id} style={styles.timelineCard}>
+                <Text style={styles.studentName}>{entry.location || 'Incident'}</Text>
+                <Text style={styles.timelineMeta}>{formatDateTime(entry.timestamp)}</Text>
+                <Text style={styles.timelineText}>{entry.description}</Text>
+                <Text style={styles.tapHint}>Action taken: {entry.actionTaken || 'Not recorded'}</Text>
+              </View>
+            ))}
+
+            <Text style={styles.sectionTitle}>Medicine Log History</Text>
+            {!historyLoading && medicineHistory.length === 0 ? <Text style={styles.statusText}>No medicine entries yet.</Text> : null}
+            {medicineHistory.slice(0, 12).map((entry) => (
+              <View key={entry.id} style={styles.timelineCard}>
+                <Text style={styles.studentName}>{entry.medicationName || 'Medication'}</Text>
+                <Text style={styles.timelineMeta}>{formatDateTime(entry.timeAdministered)}</Text>
+                <Text style={styles.timelineText}>Dosage: {entry.dosage || 'Not recorded'}</Text>
+                <Text style={styles.tapHint}>Staff member: {entry.staffMember || 'Not recorded'}</Text>
+              </View>
+            ))}
+          </>
+        ) : null}
 
         <Modal
           visible={isPinModalVisible}
@@ -1472,6 +2545,7 @@ function AttendanceClassFolderScreen({ route, navigation }) {
       <ScrollView contentContainerStyle={styles.formContainer}>
         <Text style={styles.title}>📁 {className}</Text>
         <Text style={styles.subtitle}>Attendance for {registerDate}</Text>
+        <Text style={styles.helperText}>Present is assumed. Only `Late` or `Absent` entries are logged.</Text>
 
         <TextInput
           style={styles.searchInput}
@@ -1497,6 +2571,12 @@ function AttendanceClassFolderScreen({ route, navigation }) {
               <View>
                 <Text style={styles.studentName}>{entry.studentName}</Text>
                 <Text style={styles.studentClassText}>{entry.studentId} • {getClassroomName(entry)}</Text>
+                {entry.status === 'Absent' && (
+                  entry.parentReportedAbsent
+                  || String(entry.reason || '').toLowerCase().includes(PARENT_ABSENT_REASON.toLowerCase())
+                ) ? (
+                  <Text style={styles.tapHint}>Parent marked this learner absent today.</Text>
+                ) : null}
               </View>
               <View style={[styles.statusBadge, statusStyleFor(entry.status)]}>
                 <Text style={styles.statusBadgeText}>{entry.status}</Text>
@@ -1505,7 +2585,7 @@ function AttendanceClassFolderScreen({ route, navigation }) {
 
             <TextInput
               style={[styles.formInput, styles.reasonInput]}
-              placeholder="Reason for absence or late note"
+              placeholder="Reason for late arrival or absence"
               placeholderTextColor={FORM_PLACEHOLDER_COLOR}
               value={notes[entry.studentId] ?? ''}
               onChangeText={(text) => setNotes((currentNotes) => ({
@@ -1515,17 +2595,21 @@ function AttendanceClassFolderScreen({ route, navigation }) {
             />
 
             <View style={styles.actionRow}>
-              {['Present', 'Late', 'Absent'].map((status) => (
+              {[
+                { label: 'Late', value: 'Late' },
+                { label: 'Absent', value: 'Absent' },
+                { label: 'Clear', value: 'Present' },
+              ].map(({ label, value }) => (
                 <TouchableOpacity
-                  key={status}
+                  key={value}
                   style={[
                     styles.statusActionButton,
-                    entry.status === status && styles.statusActionButtonSelected,
+                    entry.status === value && styles.statusActionButtonSelected,
                   ]}
-                  onPress={() => handleStatusUpdate(entry, status)}
+                  onPress={() => handleStatusUpdate(entry, value)}
                   disabled={savingStudentId === entry.studentId || !canTakeAttendance}
                 >
-                  <Text style={[styles.statusActionButtonText, entry.status === status && styles.selectedActionText]}>{status}</Text>
+                  <Text style={[styles.statusActionButtonText, entry.status === value && styles.selectedActionText]}>{label}</Text>
                 </TouchableOpacity>
               ))}
             </View>
@@ -1869,12 +2953,1089 @@ function MedicineAdministrationScreen({ navigation }) {
   );
 }
 
+const KATEGORIE_OPTIONS = ['Sensory', 'Fine Motor', 'Gross Motor', 'Creative', 'Cognitive', 'Language', 'Music', 'Drama'];
+const OUDERDOM_OPTIONS = ['3–12 months', '1–2 years', '2–3 years', '3–4 years'];
+
+function ActivitiesScreen({ navigation }) {
+  const accessProfile = useAccessProfile();
+  const isParentAccount = isParentRole(accessProfile);
+  const isPrincipal = String(accessProfile?.role || '').trim().toLowerCase() === 'principal';
+  const isTeacher = !isParentAccount && !isPrincipal;
+  const canExportReports = hasPermission(accessProfile, 'canExportReports');
+  const currentYear = parseInt(TODAY.split('-')[0], 10);
+  const currentMonth = parseInt(TODAY.split('-')[1], 10);
+  const currentDay = parseInt(TODAY.split('-')[2], 10);
+
+  const [activities, setActivities] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [errorMessage, setErrorMessage] = useState('');
+  const [classFilter, setClassFilter] = useState('All Classes');
+  const [deleting, setDeleting] = useState('');
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [showStartPicker, setShowStartPicker] = useState(false);
+  const [showEndPicker, setShowEndPicker] = useState(false);
+  const [startYear, setStartYear] = useState(String(currentYear));
+  const [startMonth, setStartMonth] = useState(String(currentMonth).padStart(2, '0'));
+  const [startDay, setStartDay] = useState(String(currentDay).padStart(2, '0'));
+  const [endYear, setEndYear] = useState(String(currentYear));
+  const [endMonth, setEndMonth] = useState(String(currentMonth).padStart(2, '0'));
+  const [endDay, setEndDay] = useState(String(currentDay).padStart(2, '0'));
+  const [exporting, setExporting] = useState(false);
+
+  const loadActivities = useCallback(async () => {
+    try {
+      setLoading(true);
+      setErrorMessage('');
+      let all = await fetchActivitiesFromFirestore();
+
+      if (isParentAccount) {
+        // Parents: only see activities for their linked child's class
+        const allStudents = await loadStudentsFromDataStore();
+        const linkedIds = new Set(getLinkedStudentIds(accessProfile));
+        const parentClassNames = new Set(
+          allStudents
+            .filter((s) => linkedIds.has(String(s?.id || '').trim()))
+            .map((s) => String(s?.className || '').trim())
+            .filter(Boolean),
+        );
+        all = all.filter((act) => act.className === 'All Classes' || parentClassNames.has(act.className));
+      } else if (isTeacher) {
+        // Teachers: only see their own logged activities
+        all = all.filter((act) => act.loggedByUid === accessProfile.uid);
+        if (classFilter !== 'All Classes') {
+          all = all.filter((act) => act.className === 'All Classes' || act.className === classFilter);
+        }
+      } else {
+        // Principal: sees all activities, respects class filter
+        if (classFilter !== 'All Classes') {
+          all = all.filter((act) => act.className === 'All Classes' || act.className === classFilter);
+        }
+      }
+
+      setActivities(all);
+    } catch (error) {
+      setErrorMessage(error.message || 'Could not load activities.');
+    } finally {
+      setLoading(false);
+    }
+  }, [isParentAccount, isTeacher, accessProfile, classFilter]);
+
+  useEffect(() => {
+    loadActivities();
+  }, [loadActivities]);
+
+  useFocusEffect(
+    useCallback(() => {
+      loadActivities();
+    }, [loadActivities]),
+  );
+
+  const handleDelete = (activity) => {
+    if (!isPrincipal) return;
+    Alert.alert('Delete Activity', `Delete "${activity.aktiwiteitsName}"? This cannot be undone.`, [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            setDeleting(activity.id);
+            await deleteActivityFromFirestore(activity.id, activity.storagePath);
+            await loadActivities();
+          } catch (error) {
+            Alert.alert('Delete Failed', error.message || 'Could not delete the activity.');
+          } finally {
+            setDeleting('');
+          }
+        },
+      },
+    ]);
+  };
+
+  const startDate = `${startYear}-${startMonth}-${startDay}`;
+  const endDate = `${endYear}-${endMonth}-${endDay}`;
+
+  const escapeHtml = (value) => String(value || '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+
+  const exportActivities = async () => {
+    if (startDate > endDate) {
+      Alert.alert('Date Range Error', 'Start date must be before or equal to end date.');
+      return;
+    }
+
+    const exportItems = activities.filter((activity) => {
+      const activityDate = String(activity?.datum || '').trim();
+      if (!activityDate || activityDate < startDate || activityDate > endDate) {
+        return false;
+      }
+
+      if (classFilter !== 'All Classes') {
+        return activity.className === classFilter || activity.className === 'All Classes';
+      }
+
+      return true;
+    });
+
+    if (exportItems.length === 0) {
+      Alert.alert('No Activities', 'No activities found for the selected date range.');
+      return;
+    }
+
+    try {
+      setExporting(true);
+      const pages = exportItems.map((activity) => {
+        const className = activity.className === 'All Classes' ? 'All Classes' : activity.className;
+        const ageGroup = Array.isArray(activity.ouderdomsGroep) ? activity.ouderdomsGroep.join(', ') : '';
+        const lines = [
+          ['Activity Name', activity.aktiwiteitsName],
+          ['Date', activity.datum],
+          ['Class', className],
+          ['Category', activity.kategorie],
+          ['Theme', activity.tema],
+          ['Estimated Duration', activity.duur ? `${activity.duur} minutes` : ''],
+          ['Age Group', ageGroup],
+          ['Goal', activity.doel],
+          ['Skills Developed', activity.vaardighede],
+          ['Learning Areas / CAPS', activity.leerareas],
+          ['Materials Needed', activity.benodigehede],
+          ['Preparation Steps', activity.voorbereidingStappe],
+          ['Execution Steps', activity.uitvoering],
+          ['Adjustments by Age Group', activity.aanpassingPerGroep],
+          ['Logged By', activity.loggedByName],
+        ].filter(([, value]) => String(value || '').trim().length > 0);
+
+        return `
+          <section class="page">
+            <h1>${escapeHtml(activity.aktiwiteitsName || 'Activity')}</h1>
+            ${lines.map(([label, value]) => `<p><strong>${escapeHtml(label)}:</strong> ${escapeHtml(value)}</p>`).join('')}
+          </section>
+        `;
+      }).join('');
+
+      const html = `
+        <html>
+          <head>
+            <meta charset="utf-8" />
+            <style>
+              body { font-family: Arial, sans-serif; color: #102A43; padding: 18px; }
+              h1 { margin: 0 0 12px; font-size: 22px; }
+              p { margin: 6px 0; line-height: 1.45; }
+              .page { page-break-after: always; }
+              .page:last-child { page-break-after: auto; }
+            </style>
+          </head>
+          <body>
+            ${pages}
+          </body>
+        </html>
+      `;
+
+      const file = await Print.printToFileAsync({ html });
+      const canShare = await Sharing.isAvailableAsync();
+
+      if (canShare) {
+        await Sharing.shareAsync(file.uri, {
+          mimeType: 'application/pdf',
+          dialogTitle: 'Export Activities',
+          UTI: 'com.adobe.pdf',
+        });
+      } else {
+        await Linking.openURL(file.uri);
+      }
+
+      setShowExportModal(false);
+    } catch (error) {
+      Alert.alert('Export Failed', error.message || 'Could not export activities.');
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const formatActivityDate = (dateStr) => {
+    if (!dateStr) return '—';
+    const parts = dateStr.split('-');
+    if (parts.length < 3) return dateStr;
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return `${parseInt(parts[2], 10)} ${months[parseInt(parts[1], 10) - 1]} ${parts[0]}`;
+  };
+
+  return (
+    <SafeAreaView style={styles.container}>
+      <ScrollView contentContainerStyle={styles.formContainer}>
+        <Text style={styles.title}>🎨 Activities</Text>
+        <Text style={styles.subtitle}>
+          {isParentAccount
+            ? 'Activities completed in your child\'s class'
+            : isPrincipal
+              ? 'All logged activities across all classes'
+              : 'Activities you logged'}
+        </Text>
+
+        {!isParentAccount ? (
+          <>
+            <View style={styles.activityFilterRow}>
+              {CLASSROOM_OPTIONS.map((opt) => (
+                <TouchableOpacity
+                  key={opt}
+                  style={[styles.activityFilterChip, classFilter === opt && styles.activityFilterChipActive]}
+                  onPress={() => setClassFilter(opt)}
+                >
+                  <Text style={[styles.activityFilterChipText, classFilter === opt && styles.activityFilterChipTextActive]}>
+                    {opt}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            <TouchableOpacity
+              style={styles.activityLogButton}
+              onPress={() => navigation.navigate('LogActivity')}
+            >
+              <Text style={styles.activityLogButtonText}>+ Log New Activity</Text>
+            </TouchableOpacity>
+            {isPrincipal && canExportReports ? (
+              <TouchableOpacity
+                style={styles.reportButton}
+                onPress={() => setShowExportModal(true)}
+              >
+                <Text style={styles.saveStudentButtonText}>Export Activities</Text>
+              </TouchableOpacity>
+            ) : null}
+          </>
+        ) : null}
+
+        {loading ? <Text style={styles.statusText}>Loading activities...</Text> : null}
+        {errorMessage ? <Text style={styles.errorText}>{errorMessage}</Text> : null}
+
+        {!loading && activities.length === 0 ? (
+          <View style={styles.complianceEmptyState}>
+            <Text style={styles.complianceEmptyIcon}>🎨</Text>
+            <Text style={styles.complianceEmptyText}>No activities found.</Text>
+            {isParentAccount ? (
+              <Text style={styles.complianceEmptyHint}>No activities have been logged yet for your child\'s class.</Text>
+            ) : isTeacher ? (
+              <Text style={styles.complianceEmptyHint}>You have not logged any activities yet. Use the button above.</Text>
+            ) : (
+              <Text style={styles.complianceEmptyHint}>No activities have been logged yet.</Text>
+            )}
+          </View>
+        ) : null}
+
+        {activities.map((activity) => {
+          const cardContent = (
+            <>
+              <View style={styles.activityCardHeader}>
+                <View style={styles.activityCardHeaderText}>
+                  <Text style={styles.activityCardName}>{activity.aktiwiteitsName || '—'}</Text>
+                  <Text style={styles.activityCardMeta}>
+                    {formatActivityDate(activity.datum)} • {activity.className === 'All Classes' ? 'All Classes' : activity.className}
+                  </Text>
+                </View>
+                {activity.kategorie ? (
+                  <View style={styles.activityCardBadge}>
+                    <Text style={styles.activityCardBadgeText}>{activity.kategorie}</Text>
+                  </View>
+                ) : null}
+              </View>
+
+              {activity.duur ? (
+                <Text style={styles.activityCardDetail}>⏱ {activity.duur} minute</Text>
+              ) : null}
+              {activity.tema ? (
+                <Text style={styles.activityCardDetail}>🏷 Theme: {activity.tema}</Text>
+              ) : null}
+              {activity.ouderdomsGroep && activity.ouderdomsGroep.length > 0 ? (
+                <Text style={styles.activityCardDetail}>👶 {activity.ouderdomsGroep.join(', ')}</Text>
+              ) : null}
+              {activity.doel ? (
+                <Text style={styles.activityCardBody} numberOfLines={isParentAccount ? 2 : 3}>{activity.doel}</Text>
+              ) : null}
+              {isParentAccount ? (
+                <Text style={styles.activityCardFooter}>Tap to view details ›</Text>
+              ) : (
+                activity.loggedByName ? (
+                  <Text style={styles.activityCardFooter}>Logged by {activity.loggedByName}</Text>
+                ) : null
+              )}
+            </>
+          );
+
+          // Parents: whole card taps to detail view
+          if (isParentAccount) {
+            return (
+              <TouchableOpacity
+                key={activity.id}
+                style={styles.activityCard}
+                onPress={() => navigation.navigate('ActivityDetail', { activity })}
+              >
+                {cardContent}
+              </TouchableOpacity>
+            );
+          }
+
+          // Staff: card with action buttons below
+          return (
+            <View key={activity.id} style={styles.activityCard}>
+              {cardContent}
+              <View style={styles.activityCardActionsRow}>
+                {(isPrincipal || isTeacher) ? (
+                  <TouchableOpacity
+                    style={styles.activityEditButton}
+                    onPress={() => navigation.navigate('LogActivity', { activity })}
+                  >
+                    <Text style={styles.activityEditButtonText}>Edit</Text>
+                  </TouchableOpacity>
+                ) : null}
+                {isPrincipal ? (
+                  <TouchableOpacity
+                    style={styles.activityDeleteButton}
+                    onPress={() => handleDelete(activity)}
+                    disabled={deleting === activity.id}
+                  >
+                    <Text style={styles.activityDeleteButtonText}>
+                      {deleting === activity.id ? 'Deleting...' : 'Delete'}
+                    </Text>
+                  </TouchableOpacity>
+                ) : null}
+              </View>
+            </View>
+          );
+        })}
+
+        <Modal
+          visible={showExportModal}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setShowExportModal(false)}
+        >
+          <TouchableWithoutFeedback onPress={() => setShowExportModal(false)}>
+            <View style={styles.modalBackdrop}>
+              <TouchableWithoutFeedback onPress={() => {}}>
+                <View style={styles.modalCard}>
+                  <Text style={styles.modalTitle}>Export Activities</Text>
+                  <Text style={styles.modalText}>Choose a date range for your export.</Text>
+
+                  <View style={styles.compactDateRangeContainer}>
+                    <View style={styles.compactDateFieldWrapper}>
+                      <Text style={styles.compactDateLabel}>Start Date</Text>
+                      <TouchableOpacity style={styles.compactDateField} onPress={() => setShowStartPicker(true)}>
+                        <Text style={styles.compactDateFieldText}>{formatCompactDateDisplay(startYear, startMonth, startDay)}</Text>
+                      </TouchableOpacity>
+                    </View>
+                    <View style={styles.compactDateFieldWrapper}>
+                      <Text style={styles.compactDateLabel}>End Date</Text>
+                      <TouchableOpacity style={styles.compactDateField} onPress={() => setShowEndPicker(true)}>
+                        <Text style={styles.compactDateFieldText}>{formatCompactDateDisplay(endYear, endMonth, endDay)}</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+
+                  {startDate > endDate ? (
+                    <Text style={styles.errorText}>Start date must be before or equal to end date.</Text>
+                  ) : null}
+
+                  <View style={styles.modalButtonsRow}>
+                    <TouchableOpacity style={styles.modalButtonSecondary} onPress={() => setShowExportModal(false)}>
+                      <Text style={styles.modalButtonSecondaryText}>Cancel</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.modalButtonPrimary, exporting && styles.saveStudentButtonDisabled]}
+                      onPress={exportActivities}
+                      disabled={exporting}
+                    >
+                      <Text style={styles.modalButtonPrimaryText}>{exporting ? 'Exporting...' : 'Export PDF'}</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              </TouchableWithoutFeedback>
+            </View>
+          </TouchableWithoutFeedback>
+        </Modal>
+
+        <CompactDatePickerModal
+          visible={showStartPicker}
+          onClose={() => setShowStartPicker(false)}
+          onDateSelect={(y, m, d) => {
+            setStartYear(y);
+            setStartMonth(m);
+            setStartDay(d);
+          }}
+          currentYear={parseInt(startYear, 10)}
+          currentMonth={startMonth}
+          currentDay={startDay}
+        />
+
+        <CompactDatePickerModal
+          visible={showEndPicker}
+          onClose={() => setShowEndPicker(false)}
+          onDateSelect={(y, m, d) => {
+            setEndYear(y);
+            setEndMonth(m);
+            setEndDay(d);
+          }}
+          currentYear={parseInt(endYear, 10)}
+          currentMonth={endMonth}
+          currentDay={endDay}
+        />
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
+function LogActivityScreen({ navigation, route }) {
+  const accessProfile = useAccessProfile();
+  const isParentAccount = isParentRole(accessProfile);
+  const existingActivity = route.params?.activity || null;
+  const isEditMode = Boolean(existingActivity);
+
+  useEffect(() => {
+    if (isParentAccount) {
+      Alert.alert('Access Restricted', 'Only staff can log activities.');
+      navigation.goBack();
+    }
+  }, [isParentAccount, navigation]);
+
+  const [datum, setDatum] = useState(existingActivity?.datum || TODAY);
+  const [aktiwiteitsName, setAktiwiteitsName] = useState(existingActivity?.aktiwiteitsName || '');
+  const [kategorie, setKategorie] = useState(existingActivity?.kategorie || '');
+  const [ouderdomsGroep, setOuderdomsGroep] = useState(existingActivity?.ouderdomsGroep || []);
+  const [aanpassingPerGroep, setAanpassingPerGroep] = useState(existingActivity?.aanpassingPerGroep || '');
+  const [benodigehede, setBenodigehede] = useState(existingActivity?.benodigehede || '');
+  const [voorbereidingStappe, setVoorbereidingStappe] = useState(existingActivity?.voorbereidingStappe || '');
+  const [uitvoering, setUitvoering] = useState(existingActivity?.uitvoering || '');
+  const [duur, setDuur] = useState(existingActivity?.duur || '');
+  const [doel, setDoel] = useState(existingActivity?.doel || '');
+  const [vaardighede, setVaardighede] = useState(existingActivity?.vaardighede || '');
+  const [leerareas, setLeerareas] = useState(existingActivity?.leerareas || '');
+  const [tema, setTema] = useState(existingActivity?.tema || '');
+  const [selectedClass, setSelectedClass] = useState(existingActivity?.className || 'All Classes');
+  const [fileAsset, setFileAsset] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [successMessage, setSuccessMessage] = useState('');
+  const [validationError, setValidationError] = useState('');
+
+  const toggleOuderdomsGroep = (option) => {
+    setOuderdomsGroep((current) =>
+      current.includes(option) ? current.filter((o) => o !== option) : [...current, option],
+    );
+  };
+
+  const handlePickFile = async () => {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: ['image/*', 'application/pdf'],
+        copyToCacheDirectory: true,
+        multiple: false,
+      });
+      if (result.canceled) return;
+      setFileAsset(result.assets[0]);
+    } catch {
+      Alert.alert('Error', 'Could not select the file.');
+    }
+  };
+
+  const resetForm = () => {
+    setDatum(TODAY);
+    setAktiwiteitsName('');
+    setKategorie('');
+    setOuderdomsGroep([]);
+    setAanpassingPerGroep('');
+    setBenodigehede('');
+    setVoorbereidingStappe('');
+    setUitvoering('');
+    setDuur('');
+    setDoel('');
+    setVaardighede('');
+    setLeerareas('');
+    setTema('');
+    setSelectedClass('All Classes');
+    setFileAsset(null);
+  };
+
+  const handleSubmit = async () => {
+    setValidationError('');
+    setSuccessMessage('');
+
+    if (!datum.trim()) {
+      setValidationError('Date is required.');
+      return;
+    }
+
+    if (!aktiwiteitsName.trim()) {
+      setValidationError('Activity name is required.');
+      return;
+    }
+
+    try {
+      setSaving(true);
+
+      const formData = {
+        datum: datum.trim(),
+        aktiwiteitsName: aktiwiteitsName.trim(),
+        kategorie,
+        ouderdomsGroep,
+        aanpassingPerGroep: aanpassingPerGroep.trim(),
+        benodigehede: benodigehede.trim(),
+        voorbereidingStappe: voorbereidingStappe.trim(),
+        uitvoering: uitvoering.trim(),
+        duur: duur.trim(),
+        doel: doel.trim(),
+        vaardighede: vaardighede.trim(),
+        leerareas: leerareas.trim(),
+        tema: tema.trim(),
+        className: selectedClass,
+      };
+
+      if (isEditMode) {
+        await updateActivityInFirestore(existingActivity.id, formData);
+      } else {
+        await saveActivityToFirestore(formData, accessProfile, fileAsset);
+        resetForm();
+      }
+
+      setSuccessMessage(isEditMode ? 'Activity updated successfully!' : 'Activity logged successfully!');
+      setTimeout(() => navigation.goBack(), 1500);
+    } catch (error) {
+      Alert.alert('Save Failed', error.message || 'Could not save the activity.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <SafeAreaView style={styles.container}>
+      <ScrollView contentContainerStyle={styles.formContainer} keyboardShouldPersistTaps="handled">
+        <Text style={styles.title}>Daily Activity</Text>
+        <Text style={styles.subtitle}>{isEditMode ? 'Edit this activity and save your changes' : 'Log a new class activity'}</Text>
+
+        {validationError ? <Text style={styles.errorText}>{validationError}</Text> : null}
+
+        {successMessage ? (
+          <View style={styles.successBanner}>
+            <Text style={styles.successBannerText}>{successMessage}</Text>
+          </View>
+        ) : null}
+
+        <Text style={styles.formSectionLabel}>Date *</Text>
+        <TextInput
+          style={styles.formInput}
+          value={datum}
+          onChangeText={setDatum}
+          placeholder="YYYY-MM-DD"
+          placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+        />
+
+        <Text style={styles.formSectionLabel}>Class</Text>
+        <View style={[styles.actionRow, { marginBottom: 12 }]}>
+          {CLASSROOM_OPTIONS.map((opt) => (
+            <TouchableOpacity
+              key={opt}
+              style={[styles.chipButton, selectedClass === opt && styles.chipButtonSelected]}
+              onPress={() => setSelectedClass(opt)}
+            >
+              <Text style={[styles.chipButtonText, selectedClass === opt && styles.selectedActionText]}>
+                {opt}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+
+        <Text style={styles.formSectionLabel}>Activity Name *</Text>
+        <TextInput
+          style={styles.formInput}
+          value={aktiwiteitsName}
+          onChangeText={setAktiwiteitsName}
+          placeholder="e.g. Sensory play with sand"
+          placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+        />
+
+        <Text style={styles.formSectionLabel}>Category</Text>
+        <View style={[styles.actionRow, { marginBottom: 12 }]}>
+          {KATEGORIE_OPTIONS.map((opt) => (
+            <TouchableOpacity
+              key={opt}
+              style={[styles.chipButton, kategorie === opt && styles.chipButtonSelected]}
+              onPress={() => setKategorie((prev) => (prev === opt ? '' : opt))}
+            >
+              <Text style={[styles.chipButtonText, kategorie === opt && styles.selectedActionText]}>{opt}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+
+        <Text style={styles.formSectionLabel}>Age Group</Text>
+        <View style={[styles.actionRow, { marginBottom: 12 }]}>
+          {OUDERDOM_OPTIONS.map((opt) => (
+            <TouchableOpacity
+              key={opt}
+              style={[styles.chipButton, ouderdomsGroep.includes(opt) && styles.chipButtonSelected]}
+              onPress={() => toggleOuderdomsGroep(opt)}
+            >
+              <Text style={[styles.chipButtonText, ouderdomsGroep.includes(opt) && styles.selectedActionText]}>{opt}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+
+        <Text style={styles.formSectionLabel}>How was the activity adapted for each age group?</Text>
+        <TextInput
+          style={[styles.formInput, styles.formTextArea]}
+          value={aanpassingPerGroep}
+          onChangeText={setAanpassingPerGroep}
+          placeholder="Describe adaptations per age group..."
+          placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+          multiline
+          numberOfLines={4}
+        />
+
+        <Text style={styles.formSectionLabel}>Materials needed (one item per line)</Text>
+        <TextInput
+          style={[styles.formInput, styles.formTextArea]}
+          value={benodigehede}
+          onChangeText={setBenodigehede}
+          placeholder={'e.g. Sand\nBuckets\nToys'}
+          placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+          multiline
+          numberOfLines={4}
+        />
+
+        <Text style={styles.formSectionLabel}>Preparation steps</Text>
+        <TextInput
+          style={[styles.formInput, styles.formTextArea]}
+          value={voorbereidingStappe}
+          onChangeText={setVoorbereidingStappe}
+          placeholder="Steps to prepare the activity..."
+          placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+          multiline
+          numberOfLines={4}
+        />
+
+        <Text style={styles.formSectionLabel}>How to run the activity</Text>
+        <TextInput
+          style={[styles.formInput, styles.formTextArea]}
+          value={uitvoering}
+          onChangeText={setUitvoering}
+          placeholder="Steps to run the activity..."
+          placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+          multiline
+          numberOfLines={4}
+        />
+
+        <Text style={styles.formSectionLabel}>Estimated duration (minutes)</Text>
+        <TextInput
+          style={styles.formInput}
+          value={duur}
+          onChangeText={setDuur}
+          placeholder="bv. 30"
+          placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+          keyboardType="numeric"
+        />
+
+        <Text style={styles.formSectionLabel}>Activity goal and learning outcome</Text>
+        <TextInput
+          style={[styles.formInput, styles.formTextArea]}
+          value={doel}
+          onChangeText={setDoel}
+          placeholder="Describe the goal of the activity..."
+          placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+          multiline
+          numberOfLines={4}
+        />
+
+        <Text style={styles.formSectionLabel}>Skills developed</Text>
+        <TextInput
+          style={[styles.formInput, styles.formTextArea]}
+          value={vaardighede}
+          onChangeText={setVaardighede}
+          placeholder="e.g. Fine motor skills, creative thinking..."
+          placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+          multiline
+          numberOfLines={4}
+        />
+
+        <Text style={styles.formSectionLabel}>Learning areas / CAPS alignment</Text>
+        <TextInput
+          style={[styles.formInput, styles.formTextArea]}
+          value={leerareas}
+          onChangeText={setLeerareas}
+          placeholder="e.g. Personal and Social Wellbeing, Creativity and Design..."
+          placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+          multiline
+          numberOfLines={4}
+        />
+
+        <Text style={styles.formSectionLabel}>Theme</Text>
+        <TextInput
+          style={styles.formInput}
+          value={tema}
+          onChangeText={setTema}
+          placeholder="e.g. Animals, Nature, Family..."
+          placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+        />
+
+        <Text style={styles.formSectionLabel}>File upload (optional)</Text>
+        <TouchableOpacity style={styles.activityFilePickButton} onPress={handlePickFile}>
+          <Text style={styles.activityFilePickButtonText}>
+            {fileAsset ? `📎 ${fileAsset.name}` : '+ Select image or PDF'}
+          </Text>
+        </TouchableOpacity>
+        {fileAsset ? (
+          <TouchableOpacity onPress={() => setFileAsset(null)}>
+            <Text style={styles.activityRemoveFile}>Remove file ×</Text>
+          </TouchableOpacity>
+        ) : null}
+
+        <TouchableOpacity
+          style={[styles.saveStudentButton, saving && styles.saveStudentButtonDisabled]}
+          onPress={handleSubmit}
+          disabled={saving}
+        >
+          <Text style={styles.saveStudentButtonText}>
+            {saving ? 'Saving...' : isEditMode ? 'Save Changes' : 'Save Activity'}
+          </Text>
+        </TouchableOpacity>
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
+function ActivityDetailScreen({ route }) {
+  const { activity } = route.params;
+
+  const formatActivityDate = (dateStr) => {
+    if (!dateStr) return '—';
+    const parts = dateStr.split('-');
+    if (parts.length < 3) return dateStr;
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return `${parseInt(parts[2], 10)} ${months[parseInt(parts[1], 10) - 1]} ${parts[0]}`;
+  };
+
+  const DetailRow = ({ label, value }) => {
+    if (!value || (typeof value === 'string' && !value.trim())) return null;
+    return (
+      <View style={styles.activityDetailRow}>
+        <Text style={styles.activityDetailLabel}>{label}</Text>
+        <Text style={styles.activityDetailValue}>{value}</Text>
+      </View>
+    );
+  };
+
+  return (
+    <SafeAreaView style={styles.container}>
+      <ScrollView contentContainerStyle={styles.formContainer}>
+        <Text style={styles.profileName}>{activity.aktiwiteitsName || 'Activity'}</Text>
+        <Text style={styles.subtitle}>
+          {formatActivityDate(activity.datum)} • {activity.className === 'All Classes' ? 'All Classes' : activity.className}
+        </Text>
+
+        {activity.kategorie ? (
+          <View style={[styles.activityCardBadge, { alignSelf: 'flex-start', marginBottom: 14 }]}>
+            <Text style={styles.activityCardBadgeText}>{activity.kategorie}</Text>
+          </View>
+        ) : null}
+
+        <View style={styles.card}>
+          <Text style={styles.sectionTitle}>General Information</Text>
+          <DetailRow label="Theme" value={activity.tema} />
+          <DetailRow label="Estimated duration" value={activity.duur ? `${activity.duur} minutes` : null} />
+          <DetailRow label="Age group" value={activity.ouderdomsGroep?.join(', ')} />
+        </View>
+
+        {activity.doel ? (
+          <View style={styles.card}>
+            <Text style={styles.sectionTitle}>Activity Goal</Text>
+            <Text style={styles.activityDetailValue}>{activity.doel}</Text>
+          </View>
+        ) : null}
+
+        {activity.vaardighede ? (
+          <View style={styles.card}>
+            <Text style={styles.sectionTitle}>Skills Developed</Text>
+            <Text style={styles.activityDetailValue}>{activity.vaardighede}</Text>
+          </View>
+        ) : null}
+
+        {activity.leerareas ? (
+          <View style={styles.card}>
+            <Text style={styles.sectionTitle}>Learning Areas / CAPS Alignment</Text>
+            <Text style={styles.activityDetailValue}>{activity.leerareas}</Text>
+          </View>
+        ) : null}
+
+        {activity.benodigehede ? (
+          <View style={styles.card}>
+            <Text style={styles.sectionTitle}>Materials Needed</Text>
+            <Text style={styles.activityDetailValue}>{activity.benodigehede}</Text>
+          </View>
+        ) : null}
+
+        {activity.voorbereidingStappe ? (
+          <View style={styles.card}>
+            <Text style={styles.sectionTitle}>Preparation Steps</Text>
+            <Text style={styles.activityDetailValue}>{activity.voorbereidingStappe}</Text>
+          </View>
+        ) : null}
+
+        {activity.uitvoering ? (
+          <View style={styles.card}>
+            <Text style={styles.sectionTitle}>Execution Steps</Text>
+            <Text style={styles.activityDetailValue}>{activity.uitvoering}</Text>
+          </View>
+        ) : null}
+
+        {activity.aanpassingPerGroep ? (
+          <View style={styles.card}>
+            <Text style={styles.sectionTitle}>Adaptations by Age Group</Text>
+            <Text style={styles.activityDetailValue}>{activity.aanpassingPerGroep}</Text>
+          </View>
+        ) : null}
+
+        {activity.fileUrl ? (
+          <View style={styles.card}>
+            <Text style={styles.sectionTitle}>Attached File</Text>
+            <TouchableOpacity
+              style={styles.activityLogButton}
+              onPress={() => Linking.openURL(activity.fileUrl).catch(() => Alert.alert('Could not open file', 'The file could not be opened.'))}
+            >
+              <Text style={styles.activityLogButtonText}>📎 {activity.fileName || 'Open file'}</Text>
+            </TouchableOpacity>
+          </View>
+        ) : null}
+
+        {activity.loggedByName ? (
+          <Text style={styles.activityCardFooter}>Logged by {activity.loggedByName}</Text>
+        ) : null}
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
+function ComplianceDocumentsScreen({ navigation }) {
+  const accessProfile = useAccessProfile();
+  const canManage = hasPermission(accessProfile, 'canManageUsers');
+
+  useEffect(() => {
+    if (isParentRole(accessProfile)) {
+      Alert.alert('Access Restricted', 'Compliance documents are not available for parent accounts.');
+      navigation.goBack();
+    }
+  }, [accessProfile, navigation]);
+
+  return (
+    <SafeAreaView style={styles.container}>
+      <ScrollView contentContainerStyle={styles.formContainer}>
+        <Text style={styles.title}>Compliance Documents</Text>
+        <Text style={styles.subtitle}>ECD required compliance documentation folders</Text>
+
+        <View style={styles.infoBox}>
+          <Text style={styles.infoText}>
+            {canManage
+              ? 'Tap a folder to view or upload documents. Only principals can upload and delete files.'
+              : 'Tap a folder to view compliance documents for this school.'}
+          </Text>
+        </View>
+
+        {COMPLIANCE_FOLDERS.map((folder) => (
+          <TouchableOpacity
+            key={folder.key}
+            style={styles.complianceFolderCard}
+            onPress={() => navigation.navigate('ComplianceDocumentFolder', { folder })}
+          >
+            <View style={styles.complianceFolderIconWrap}>
+              <Text style={styles.complianceFolderIcon}>{folder.icon}</Text>
+            </View>
+            <View style={styles.complianceFolderTextWrap}>
+              <Text style={styles.complianceFolderLabel}>{folder.label}</Text>
+              <Text style={styles.complianceFolderDesc}>{folder.description}</Text>
+            </View>
+            <Text style={styles.complianceFolderChevron}>›</Text>
+          </TouchableOpacity>
+        ))}
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
+function ComplianceDocumentFolderScreen({ navigation, route }) {
+  const { folder } = route.params;
+  const accessProfile = useAccessProfile();
+  const canManage = hasPermission(accessProfile, 'canManageUsers');
+
+  const [documents, setDocuments] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [uploading, setUploading] = useState(false);
+  const [notes, setNotes] = useState('');
+  const [errorMessage, setErrorMessage] = useState('');
+
+  const loadDocuments = useCallback(async () => {
+    try {
+      setLoading(true);
+      setErrorMessage('');
+      const docs = await fetchComplianceDocuments(folder.key);
+      setDocuments(docs);
+    } catch (error) {
+      setErrorMessage(error.message || 'Could not load documents.');
+    } finally {
+      setLoading(false);
+    }
+  }, [folder.key]);
+
+  useEffect(() => {
+    loadDocuments();
+  }, [loadDocuments]);
+
+  const handlePickAndUpload = async () => {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        copyToCacheDirectory: true,
+        multiple: false,
+      });
+
+      if (result.canceled) return;
+
+      const asset = result.assets[0];
+      setUploading(true);
+
+      await saveComplianceDocument(folder.key, asset.uri, asset.name, notes, accessProfile);
+      setNotes('');
+      await loadDocuments();
+      Alert.alert('Uploaded', `"${asset.name}" has been uploaded successfully.`);
+    } catch (error) {
+      Alert.alert('Upload Failed', error.message || 'Could not upload the document.');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleDelete = (complianceDoc) => {
+    Alert.alert(
+      'Delete Document',
+      `Remove "${complianceDoc.fileName}"? This cannot be undone.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await deleteComplianceDocument(complianceDoc.id, complianceDoc.storagePath);
+              await loadDocuments();
+            } catch (error) {
+              Alert.alert('Delete Failed', error.message || 'Could not delete the document.');
+            }
+          },
+        },
+      ],
+    );
+  };
+
+  const handleOpen = async (complianceDoc) => {
+    const supported = await Linking.canOpenURL(complianceDoc.fileUrl);
+    if (supported) {
+      await Linking.openURL(complianceDoc.fileUrl);
+    } else {
+      Alert.alert('Cannot Open', 'Could not open this document link.');
+    }
+  };
+
+  const formatDate = (isoString) => {
+    if (!isoString) return '—';
+    const d = new Date(isoString);
+    return `${d.getDate()} ${['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][d.getMonth()]} ${d.getFullYear()}`;
+  };
+
+  return (
+    <SafeAreaView style={styles.container}>
+      <ScrollView contentContainerStyle={styles.formContainer}>
+        <Text style={styles.title}>{folder.icon} {folder.label}</Text>
+        <Text style={styles.subtitle}>{folder.description}</Text>
+
+        {loading ? <Text style={styles.statusText}>Loading documents...</Text> : null}
+        {errorMessage ? <Text style={styles.errorText}>{errorMessage}</Text> : null}
+
+        {!loading && documents.length === 0 ? (
+          <View style={styles.complianceEmptyState}>
+            <Text style={styles.complianceEmptyIcon}>📂</Text>
+            <Text style={styles.complianceEmptyText}>No documents uploaded yet.</Text>
+            {canManage ? <Text style={styles.complianceEmptyHint}>Use the upload button below to add your first document.</Text> : null}
+          </View>
+        ) : null}
+
+        {documents.map((complianceDoc) => (
+          <View key={complianceDoc.id} style={styles.complianceDocCard}>
+            <TouchableOpacity style={styles.complianceDocMain} onPress={() => handleOpen(complianceDoc)}>
+              <Text style={styles.complianceDocIcon}>📄</Text>
+              <View style={styles.complianceDocTextWrap}>
+                <Text style={styles.complianceDocName} numberOfLines={2}>{complianceDoc.fileName}</Text>
+                <Text style={styles.complianceDocMeta}>Uploaded {formatDate(complianceDoc.uploadedAt)}</Text>
+                {complianceDoc.uploadedByEmail ? (
+                  <Text style={styles.complianceDocMeta}>By {complianceDoc.uploadedByEmail}</Text>
+                ) : null}
+                {complianceDoc.notes ? (
+                  <Text style={styles.complianceDocNotes}>{complianceDoc.notes}</Text>
+                ) : null}
+              </View>
+            </TouchableOpacity>
+            <View style={styles.complianceDocActions}>
+              <TouchableOpacity style={styles.complianceOpenBtn} onPress={() => handleOpen(complianceDoc)}>
+                <Text style={styles.complianceOpenBtnText}>Open</Text>
+              </TouchableOpacity>
+              {canManage ? (
+                <TouchableOpacity style={styles.complianceDeleteBtn} onPress={() => handleDelete(complianceDoc)}>
+                  <Text style={styles.complianceDeleteBtnText}>Delete</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
+          </View>
+        ))}
+
+        {canManage ? (
+          <View style={styles.complianceUploadSection}>
+            <Text style={styles.complianceUploadTitle}>Upload Document</Text>
+            <TextInput
+              style={styles.formInput}
+              placeholder="Notes (optional)"
+              placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+              value={notes}
+              onChangeText={setNotes}
+            />
+            <TouchableOpacity
+              style={[styles.complianceUploadBtn, uploading && styles.saveStudentButtonDisabled]}
+              onPress={handlePickAndUpload}
+              disabled={uploading}
+            >
+              <Text style={styles.complianceUploadBtnText}>
+                {uploading ? 'Uploading...' : '+ Choose & Upload File'}
+              </Text>
+            </TouchableOpacity>
+            <Text style={styles.helperText}>PDF, Word, images, and other files are accepted.</Text>
+          </View>
+        ) : null}
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
 function ComplianceReportsScreen({ navigation }) {
   const accessProfile = useAccessProfile();
   const canExportReports = hasPermission(accessProfile, 'canExportReports');
   const [schoolName, setSchoolName] = useState(DEFAULT_SCHOOL_NAME);
-  const [startDate, setStartDate] = useState(TODAY);
-  const [endDate, setEndDate] = useState(TODAY);
+
+  const currentYear = parseInt(TODAY.split('-')[0], 10);
+  const currentMonth = parseInt(TODAY.split('-')[1], 10);
+  const currentDay = parseInt(TODAY.split('-')[2], 10);
+
+  const [startYear, setStartYear] = useState(String(currentYear));
+  const [startMonth, setStartMonth] = useState(String(currentMonth).padStart(2, '0'));
+  const [startDay, setStartDay] = useState(String(currentDay).padStart(2, '0'));
+  const [endYear, setEndYear] = useState(String(currentYear));
+  const [endMonth, setEndMonth] = useState(String(currentMonth).padStart(2, '0'));
+  const [endDay, setEndDay] = useState(String(currentDay).padStart(2, '0'));
+
+  const [showStartPicker, setShowStartPicker] = useState(false);
+  const [showEndPicker, setShowEndPicker] = useState(false);
 
   useEffect(() => {
     if (!canExportReports) {
@@ -1883,12 +4044,10 @@ function ComplianceReportsScreen({ navigation }) {
     }
   }, [canExportReports, navigation]);
 
-  const handleExport = async () => {
-    if (!startDate.trim() || !endDate.trim()) {
-      Alert.alert('Missing Dates', 'Please enter both start and end dates.');
-      return;
-    }
+  const startDate = `${startYear}-${startMonth}-${startDay}`;
+  const endDate = `${endYear}-${endMonth}-${endDay}`;
 
+  const handleExport = async () => {
     if (startDate > endDate) {
       Alert.alert('Date Range Error', 'Start date must be before or equal to end date.');
       return;
@@ -1896,7 +4055,7 @@ function ComplianceReportsScreen({ navigation }) {
 
     const url = `${API_BASE_URL}/exports/compliance-report?schoolName=${encodeURIComponent(
       schoolName.trim() || DEFAULT_SCHOOL_NAME,
-    )}&startDate=${encodeURIComponent(startDate.trim())}&endDate=${encodeURIComponent(endDate.trim())}`;
+    )}&startDate=${encodeURIComponent(startDate)}&endDate=${encodeURIComponent(endDate)}`;
 
     const supported = await Linking.canOpenURL(url);
     if (!supported) {
@@ -1914,7 +4073,7 @@ function ComplianceReportsScreen({ navigation }) {
         <Text style={styles.subtitle}>Generate a professional PDF layout for audits and recordkeeping</Text>
 
         <View style={styles.infoBox}>
-          <Text style={styles.infoText}>The PDF includes School Name, Date Range, attendance, incidents, and medicine logs.</Text>
+          <Text style={styles.infoText}>The PDF includes School Name, Date Range, attendance (Late/Absent only), incidents, and medicine logs.</Text>
         </View>
 
         <TextInput
@@ -1924,32 +4083,122 @@ function ComplianceReportsScreen({ navigation }) {
           value={schoolName}
           onChangeText={setSchoolName}
         />
-        <TextInput
-          style={styles.formInput}
-          placeholder="Start Date (YYYY-MM-DD)"
-          placeholderTextColor={FORM_PLACEHOLDER_COLOR}
-          value={startDate}
-          onChangeText={setStartDate}
-        />
-        <TextInput
-          style={styles.formInput}
-          placeholder="End Date (YYYY-MM-DD)"
-          placeholderTextColor={FORM_PLACEHOLDER_COLOR}
-          value={endDate}
-          onChangeText={setEndDate}
-        />
+
+        <View style={styles.compactDateRangeContainer}>
+          <View style={styles.compactDateFieldWrapper}>
+            <Text style={styles.compactDateLabel}>Start Date</Text>
+            <TouchableOpacity
+              style={styles.compactDateField}
+              onPress={() => setShowStartPicker(true)}
+            >
+              <Text style={styles.compactDateFieldText}>{formatCompactDateDisplay(startYear, startMonth, startDay)}</Text>
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.compactDateFieldWrapper}>
+            <Text style={styles.compactDateLabel}>End Date</Text>
+            <TouchableOpacity
+              style={styles.compactDateField}
+              onPress={() => setShowEndPicker(true)}
+            >
+              <Text style={styles.compactDateFieldText}>{formatCompactDateDisplay(endYear, endMonth, endDay)}</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
 
         <TouchableOpacity style={styles.reportButton} onPress={handleExport}>
           <Text style={styles.saveStudentButtonText}>Open PDF Export</Text>
         </TouchableOpacity>
+
+        <CompactDatePickerModal
+          visible={showStartPicker}
+          onClose={() => setShowStartPicker(false)}
+          onDateSelect={(y, m, d) => {
+            setStartYear(y);
+            setStartMonth(m);
+            setStartDay(d);
+          }}
+          currentYear={parseInt(startYear, 10)}
+          currentMonth={startMonth}
+          currentDay={startDay}
+        />
+
+        <CompactDatePickerModal
+          visible={showEndPicker}
+          onClose={() => setShowEndPicker(false)}
+          onDateSelect={(y, m, d) => {
+            setEndYear(y);
+            setEndMonth(m);
+            setEndDay(d);
+          }}
+          currentYear={parseInt(endYear, 10)}
+          currentMonth={endMonth}
+          currentDay={endDay}
+        />
       </ScrollView>
     </SafeAreaView>
+  );
+}
+
+function CompactDatePickerColumn({ items, selectedValue, onSelect, label }) {
+  const scrollViewRef = React.useRef(null);
+  const itemHeight = 40;
+
+  const currentIndex = items.indexOf(selectedValue);
+
+  const handleMomentumScrollEnd = (event) => {
+    const offsetY = event.nativeEvent.contentOffset.y;
+    const index = Math.round(offsetY / itemHeight);
+    if (index >= 0 && index < items.length) {
+      onSelect(items[index]);
+    }
+  };
+
+  React.useEffect(() => {
+    if (scrollViewRef.current && currentIndex >= 0) {
+      scrollViewRef.current.scrollTo({
+        y: currentIndex * itemHeight,
+        animated: true,
+      });
+    }
+  }, [currentIndex]);
+
+  return (
+    <View style={styles.compactDatePickerColumnContainer}>
+      <Text style={styles.compactDatePickerLabel}>{label}</Text>
+      <View style={styles.compactDatePickerScrollBound}>
+        <View style={styles.compactDatePickerOverlay} />
+        <ScrollView
+          ref={scrollViewRef}
+          scrollEventThrottle={16}
+          snapToInterval={itemHeight}
+          decelerationRate="fast"
+          showsVerticalScrollIndicator={false}
+          onMomentumScrollEnd={handleMomentumScrollEnd}
+          style={styles.compactDatePickerScroll}
+        >
+          {items.map((item) => (
+            <View key={item} style={{ height: itemHeight, justifyContent: 'center', alignItems: 'center' }}>
+              <Text
+                style={[
+                  styles.compactDatePickerItem,
+                  item === selectedValue && styles.compactDatePickerItemSelected,
+                ]}
+              >
+                {item}
+              </Text>
+            </View>
+          ))}
+        </ScrollView>
+      </View>
+    </View>
   );
 }
 
 function StudentFormScreen({ navigation, route }) {
   const accessProfile = useAccessProfile();
   const canEditStudents = hasPermission(accessProfile, 'canEditStudents');
+  const canEditOwnChildMedicalInfo = hasPermission(accessProfile, 'canEditOwnChildMedicalInfo');
   const mode = route.params?.mode || 'add';
   const initialStudent = route.params?.student;
   const initialEmergencyContacts = Array.isArray(initialStudent?.emergencyContacts)
@@ -1971,10 +4220,14 @@ function StudentFormScreen({ navigation, route }) {
   const [doctorContact, setDoctorContact] = useState(initialStudent?.doctorContact || '');
   const [medicalPin, setMedicalPin] = useState(initialStudent?.medicalPin || '');
   const [isSaving, setIsSaving] = useState(false);
+  const isParentEditMode = mode === 'parent-edit';
+  const canSaveStudent = canEditStudents || (isParentEditMode && canEditOwnChildMedicalInfo && canAccessStudent(accessProfile, initialStudent));
 
   const handleSubmit = async () => {
-    if (!canEditStudents) {
-      Alert.alert('Access Restricted', 'Your account can view student details but cannot add or edit learners.');
+    if (!canSaveStudent) {
+      Alert.alert('Access Restricted', isParentEditMode
+        ? 'This parent account can only update the medical/contact details of its linked child.'
+        : 'Your account can view student details but cannot add or edit learners.');
       return;
     }
 
@@ -1995,9 +4248,9 @@ function StudentFormScreen({ navigation, route }) {
     ].filter((contact) => contact.name || contact.number);
 
     const payload = {
-      firstName: firstName.trim(),
-      lastName: lastName.trim(),
-      className: className.trim() || CLASSROOM_OPTIONS[1],
+      firstName: isParentEditMode ? String(initialStudent?.firstName || firstName).trim() : firstName.trim(),
+      lastName: isParentEditMode ? String(initialStudent?.lastName || lastName).trim() : lastName.trim(),
+      className: isParentEditMode ? String(initialStudent?.className || className).trim() : className.trim() || CLASSROOM_OPTIONS[1],
       emergencyContacts,
       allergies: allergies.trim() || 'No known allergies',
       medicalAidName: medicalAidName.trim(),
@@ -2022,50 +4275,60 @@ function StudentFormScreen({ navigation, route }) {
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={styles.formContainer}>
-        <Text style={styles.formTitle}>{mode === 'edit' ? 'Edit Student Info' : 'Add New Student'}</Text>
-        {!canEditStudents ? (
+        <Text style={styles.formTitle}>
+          {isParentEditMode ? 'Update Medical Info' : mode === 'edit' ? 'Edit Student Info' : 'Add New Student'}
+        </Text>
+        {!canSaveStudent ? (
           <View style={styles.infoBox}>
             <Text style={styles.infoText}>This account has view-only student access. Ask a principal/admin account to make changes.</Text>
           </View>
+        ) : isParentEditMode ? (
+          <View style={styles.infoBox}>
+            <Text style={styles.infoText}>You can update emergency contacts and medical information for your linked child here. Learner name, class, attendance, incident, and medicine records stay protected.</Text>
+          </View>
         ) : null}
 
-        <TextInput
-          style={styles.formInput}
-          placeholder="First Name"
-          placeholderTextColor={FORM_PLACEHOLDER_COLOR}
-          value={firstName}
-          onChangeText={setFirstName}
-        />
-        <TextInput
-          style={styles.formInput}
-          placeholder="Last Name"
-          placeholderTextColor={FORM_PLACEHOLDER_COLOR}
-          value={lastName}
-          onChangeText={setLastName}
-        />
+        {!isParentEditMode ? (
+          <>
+            <TextInput
+              style={styles.formInput}
+              placeholder="First Name"
+              placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+              value={firstName}
+              onChangeText={setFirstName}
+            />
+            <TextInput
+              style={styles.formInput}
+              placeholder="Last Name"
+              placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+              value={lastName}
+              onChangeText={setLastName}
+            />
 
-        <Text style={styles.formSectionLabel}>Class Folder</Text>
-        <TextInput
-          style={styles.formInput}
-          placeholder="Class Name"
-          placeholderTextColor={FORM_PLACEHOLDER_COLOR}
-          value={className}
-          onChangeText={setClassName}
-        />
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipContainer}>
-          {CLASSROOM_OPTIONS.slice(1).map((option) => (
-            <TouchableOpacity
-              key={option}
-              style={[
-                styles.chipButton,
-                className === option && styles.chipButtonSelected,
-              ]}
-              onPress={() => setClassName(option)}
-            >
-              <Text style={[styles.chipButtonText, className === option && styles.selectedActionText]}>{option}</Text>
-            </TouchableOpacity>
-          ))}
-        </ScrollView>
+            <Text style={styles.formSectionLabel}>Class Folder</Text>
+            <TextInput
+              style={styles.formInput}
+              placeholder="Class Name"
+              placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+              value={className}
+              onChangeText={setClassName}
+            />
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipContainer}>
+              {CLASSROOM_OPTIONS.slice(1).map((option) => (
+                <TouchableOpacity
+                  key={option}
+                  style={[
+                    styles.chipButton,
+                    className === option && styles.chipButtonSelected,
+                  ]}
+                  onPress={() => setClassName(option)}
+                >
+                  <Text style={[styles.chipButtonText, className === option && styles.selectedActionText]}>{option}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </>
+        ) : null}
 
         <Text style={styles.formSectionLabel}>Emergency Contact 1 (Required)</Text>
         <TextInput
@@ -2156,12 +4419,12 @@ function StudentFormScreen({ navigation, route }) {
         />
 
         <TouchableOpacity
-          style={[styles.saveStudentButton, (isSaving || !canEditStudents) && styles.saveStudentButtonDisabled]}
+          style={[styles.saveStudentButton, (isSaving || !canSaveStudent) && styles.saveStudentButtonDisabled]}
           onPress={handleSubmit}
-          disabled={isSaving || !canEditStudents}
+          disabled={isSaving || !canSaveStudent}
         >
           <Text style={styles.saveStudentButtonText}>
-            {!canEditStudents ? 'View-only student access' : isSaving ? 'Saving...' : 'Save Student'}
+            {!canSaveStudent ? 'View-only student access' : isSaving ? 'Saving...' : isParentEditMode ? 'Save Medical Info' : 'Save Student'}
           </Text>
         </TouchableOpacity>
       </ScrollView>
@@ -2399,6 +4662,44 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontWeight: '700',
   },
+  quickLogRow: {
+    marginTop: 10,
+    flexDirection: 'row',
+    gap: 8,
+    flexWrap: 'wrap',
+  },
+  quickLogButton: {
+    backgroundColor: '#126782',
+    borderRadius: 10,
+    paddingVertical: 9,
+    paddingHorizontal: 12,
+  },
+  quickLogButtonText: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+  },
+  quickLogButtonSecondary: {
+    backgroundColor: '#E4E7EB',
+    borderRadius: 10,
+    paddingVertical: 9,
+    paddingHorizontal: 12,
+  },
+  quickLogButtonSecondaryText: {
+    color: '#102A43',
+    fontWeight: '700',
+  },
+  undoAbsentButton: {
+    marginTop: 8,
+    alignSelf: 'flex-start',
+    backgroundColor: '#B91C1C',
+    borderRadius: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+  },
+  undoAbsentButtonText: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+  },
   card: {
     backgroundColor: '#FFFFFF',
     borderRadius: 12,
@@ -2623,6 +4924,36 @@ const styles = StyleSheet.create({
   autocompleteContainer: {
     marginBottom: 10,
   },
+  searchInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#BCCCDC',
+    borderRadius: 10,
+    paddingRight: 8,
+    marginBottom: 12,
+  },
+  autocompleteTextInput: {
+    flex: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    color: '#102A43',
+  },
+  clearSearchButton: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#E9EEF5',
+  },
+  clearSearchButtonText: {
+    color: '#486581',
+    fontSize: 18,
+    fontWeight: '800',
+    lineHeight: 20,
+  },
   autocompleteResults: {
     backgroundColor: '#FFFFFF',
     borderWidth: 1,
@@ -2631,6 +4962,9 @@ const styles = StyleSheet.create({
     marginTop: -4,
     marginBottom: 8,
     overflow: 'hidden',
+  },
+  autocompleteScrollArea: {
+    maxHeight: 156,
   },
   autocompleteItem: {
     paddingHorizontal: 12,
@@ -2709,5 +5043,524 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     alignItems: 'center',
     paddingVertical: 13,
+  },
+  complianceFolderCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#D9E2EC',
+    padding: 14,
+    marginBottom: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  complianceFolderIconWrap: {
+    width: 44,
+    height: 44,
+    borderRadius: 10,
+    backgroundColor: '#EEF4FF',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  complianceFolderIcon: {
+    fontSize: 22,
+  },
+  complianceFolderTextWrap: {
+    flex: 1,
+  },
+  complianceFolderLabel: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#102A43',
+    marginBottom: 2,
+  },
+  complianceFolderDesc: {
+    fontSize: 12,
+    color: '#486581',
+    lineHeight: 16,
+  },
+  complianceFolderChevron: {
+    fontSize: 22,
+    color: '#7C8FA3',
+    fontWeight: '300',
+  },
+  complianceEmptyState: {
+    alignItems: 'center',
+    paddingVertical: 32,
+  },
+  complianceEmptyIcon: {
+    fontSize: 40,
+    marginBottom: 10,
+  },
+  complianceEmptyText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#486581',
+    marginBottom: 6,
+  },
+  complianceEmptyHint: {
+    fontSize: 13,
+    color: '#7C8FA3',
+    textAlign: 'center',
+  },
+  complianceDocCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#D9E2EC',
+    marginBottom: 10,
+    overflow: 'hidden',
+  },
+  complianceDocMain: {
+    flexDirection: 'row',
+    padding: 14,
+    alignItems: 'flex-start',
+    gap: 10,
+  },
+  complianceDocIcon: {
+    fontSize: 28,
+    marginTop: 2,
+  },
+  complianceDocTextWrap: {
+    flex: 1,
+  },
+  complianceDocName: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#102A43',
+    marginBottom: 4,
+  },
+  complianceDocMeta: {
+    fontSize: 12,
+    color: '#486581',
+    marginBottom: 2,
+  },
+  complianceDocNotes: {
+    fontSize: 12,
+    color: '#102A43',
+    marginTop: 4,
+    fontStyle: 'italic',
+  },
+  complianceDocActions: {
+    flexDirection: 'row',
+    borderTopWidth: 1,
+    borderTopColor: '#EEF2F6',
+  },
+  complianceOpenBtn: {
+    flex: 1,
+    paddingVertical: 10,
+    alignItems: 'center',
+    backgroundColor: '#F8FAFC',
+  },
+  complianceOpenBtnText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#126782',
+  },
+  complianceDeleteBtn: {
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    alignItems: 'center',
+    backgroundColor: '#FFF5F5',
+    borderLeftWidth: 1,
+    borderLeftColor: '#EEF2F6',
+  },
+  complianceDeleteBtnText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#C92A2A',
+  },
+  complianceUploadSection: {
+    marginTop: 16,
+    backgroundColor: '#F8FAFC',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#D9E2EC',
+    padding: 14,
+  },
+  complianceUploadTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#102A43',
+    marginBottom: 10,
+  },
+  complianceUploadBtn: {
+    backgroundColor: '#126782',
+    borderRadius: 10,
+    alignItems: 'center',
+    paddingVertical: 13,
+    marginTop: 4,
+    marginBottom: 6,
+  },
+  complianceUploadBtnText: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+    fontSize: 15,
+  },
+  dateRangeLabel: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#102A43',
+    marginTop: 16,
+    marginBottom: 12,
+  },
+  datePickerRow: {
+    flexDirection: 'row',
+    gap: 12,
+    marginBottom: 16,
+  },
+  datePickerColumnContainer: {
+    flex: 1,
+  },
+  datePickerLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#486581',
+    marginBottom: 6,
+    textAlign: 'center',
+  },
+  datePickerScrollBound: {
+    height: 180,
+    backgroundColor: '#F8FAFC',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#D9E2EC',
+    overflow: 'hidden',
+    position: 'relative',
+  },
+  datePickerScroll: {
+    flex: 1,
+  },
+  datePickerItem: {
+    fontSize: 16,
+    fontWeight: '500',
+    color: '#7C8FA3',
+  },
+  datePickerItemSelected: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#102A43',
+  },
+  datePickerOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    borderTopWidth: 1,
+    borderBottomWidth: 1,
+    borderTopColor: 'rgba(16, 42, 67, 0.1)',
+    borderBottomColor: 'rgba(16, 42, 67, 0.1)',
+    top: 65,
+    height: 50,
+    pointerEvents: 'none',
+    zIndex: 10,
+  },
+  compactDateRangeContainer: {
+    flexDirection: 'row',
+    gap: 12,
+    marginVertical: 12,
+  },
+  compactDateFieldWrapper: {
+    flex: 1,
+  },
+  compactDateLabel: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#486581',
+    marginBottom: 6,
+  },
+  compactDateField: {
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#D9E2EC',
+    borderRadius: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 10,
+    justifyContent: 'center',
+  },
+  compactDateFieldText: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#102A43',
+  },
+  datePickerBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  datePickerModalCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    padding: 16,
+    width: '85%',
+    maxWidth: 350,
+  },
+  datePickerModalTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#102A43',
+    marginBottom: 16,
+    textAlign: 'center',
+  },
+  compactDatePickerRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 16,
+  },
+  datePickerModalButtonRow: {
+    flexDirection: 'row',
+    gap: 10,
+    justifyContent: 'flex-end',
+  },
+  datePickerModalCancelBtn: {
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 6,
+    backgroundColor: '#E4E7EB',
+  },
+  datePickerModalCancelText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#486581',
+  },
+  datePickerModalConfirmBtn: {
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    borderRadius: 6,
+    backgroundColor: '#126782',
+  },
+  datePickerModalConfirmText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#FFFFFF',
+  },
+  compactDatePickerColumnContainer: {
+    flex: 1,
+  },
+  compactDatePickerLabel: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#486581',
+    marginBottom: 6,
+    textAlign: 'center',
+  },
+  compactDatePickerScrollBound: {
+    height: 120,
+    backgroundColor: '#F8FAFC',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#D9E2EC',
+    overflow: 'hidden',
+    position: 'relative',
+  },
+  compactDatePickerScroll: {
+    flex: 1,
+  },
+  compactDatePickerItem: {
+    fontSize: 13,
+    fontWeight: '500',
+    color: '#7C8FA3',
+  },
+  compactDatePickerItemSelected: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#102A43',
+  },
+  compactDatePickerOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    borderTopWidth: 1,
+    borderBottomWidth: 1,
+    borderTopColor: 'rgba(16, 42, 67, 0.1)',
+    borderBottomColor: 'rgba(16, 42, 67, 0.1)',
+    top: 40,
+    height: 40,
+    pointerEvents: 'none',
+    zIndex: 10,
+  },
+  formTextArea: {
+    minHeight: 96,
+    textAlignVertical: 'top',
+  },
+  successBanner: {
+    backgroundColor: '#DCFCE7',
+    borderRadius: 10,
+    padding: 14,
+    marginBottom: 12,
+    alignItems: 'center',
+  },
+  successBannerText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#166534',
+  },
+  activityFilterRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 14,
+  },
+  activityFilterChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 20,
+    backgroundColor: '#EEF4FF',
+    borderWidth: 1,
+    borderColor: '#D9E2EC',
+  },
+  activityFilterChipActive: {
+    backgroundColor: '#126782',
+    borderColor: '#126782',
+  },
+  activityFilterChipText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#486581',
+  },
+  activityFilterChipTextActive: {
+    color: '#FFFFFF',
+  },
+  activityLogButton: {
+    backgroundColor: '#126782',
+    borderRadius: 10,
+    alignItems: 'center',
+    paddingVertical: 13,
+    marginBottom: 16,
+  },
+  activityLogButtonText: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+    fontSize: 15,
+  },
+  activityCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#D9E2EC',
+    padding: 14,
+    marginBottom: 10,
+  },
+  activityCardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    marginBottom: 8,
+  },
+  activityCardHeaderText: {
+    flex: 1,
+    marginRight: 8,
+  },
+  activityCardName: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#102A43',
+    marginBottom: 2,
+  },
+  activityCardMeta: {
+    fontSize: 12,
+    color: '#486581',
+  },
+  activityCardBadge: {
+    backgroundColor: '#EEF4FF',
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  activityCardBadgeText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#126782',
+  },
+  activityCardDetail: {
+    fontSize: 13,
+    color: '#486581',
+    marginBottom: 4,
+  },
+  activityCardBody: {
+    fontSize: 13,
+    color: '#334E68',
+    lineHeight: 18,
+    marginTop: 4,
+    marginBottom: 4,
+  },
+  activityCardFooter: {
+    fontSize: 11,
+    color: '#7C8FA3',
+    marginTop: 6,
+  },
+  activityDeleteButton: {
+    marginTop: 10,
+    paddingVertical: 6,
+    paddingHorizontal: 14,
+    borderRadius: 8,
+    backgroundColor: '#FFF5F5',
+    borderWidth: 1,
+    borderColor: '#FECACA',
+  },
+  activityDeleteButtonText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#C92A2A',
+  },
+  activityFilePickButton: {
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#D9E2EC',
+    borderRadius: 10,
+    alignItems: 'center',
+    paddingVertical: 13,
+    marginBottom: 6,
+  },
+  activityFilePickButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#126782',
+  },
+  activityRemoveFile: {
+    fontSize: 13,
+    color: '#C92A2A',
+    textAlign: 'center',
+    marginBottom: 12,
+  },
+  activityCardActionsRow: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 8,
+    marginTop: 10,
+  },
+  activityEditButton: {
+    paddingVertical: 6,
+    paddingHorizontal: 14,
+    borderRadius: 8,
+    backgroundColor: '#EEF4FF',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+  },
+  activityEditButtonText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#1D4ED8',
+  },
+  activityDetailRow: {
+    marginBottom: 10,
+  },
+  activityDetailLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#486581',
+    marginBottom: 2,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  activityDetailValue: {
+    fontSize: 14,
+    color: '#102A43',
+    lineHeight: 20,
   },
 });

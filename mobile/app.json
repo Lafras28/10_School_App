@@ -24,8 +24,14 @@
       "predictiveBackGestureEnabled": false
     },
     "web": {
+      "bundler": "metro",
       "output": "static",
-      "favicon": "./assets/images/favicon.png"
+      "favicon": "./assets/images/favicon.png",
+      "name": "School Safety",
+      "shortName": "SchoolSafety",
+      "themeColor": "#0B6E4F",
+      "backgroundColor": "#ffffff",
+      "display": "standalone"
     },
     "plugins": [
       "expo-router",

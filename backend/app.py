@@ -444,6 +444,8 @@ def export_compliance_report():
 
     students = load_students()
     attendance_entries = list_attendance_entries_for_range(start_date, end_date, students)
+    # Filter to only include Late and Absent entries, exclude Present
+    attendance_entries = [entry for entry in attendance_entries if entry.get('status') in ['Late', 'Absent']]
     incidents = filter_records_by_created_at(list_incidents(), start_date, end_date, field_name='timestamp')
     medicine_entries = filter_records_by_created_at(list_medicine_logs(), start_date, end_date, field_name='timeAdministered')
 

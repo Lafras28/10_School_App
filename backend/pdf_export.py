@@ -91,12 +91,11 @@ def build_compliance_report_pdf(
 
     elements.append(Paragraph('Digital Attendance Register', section_style))
     if attendance_entries:
-        present_count = sum(1 for entry in attendance_entries if entry.get('status') == 'Present')
         absent_count = sum(1 for entry in attendance_entries if entry.get('status') == 'Absent')
         late_count = sum(1 for entry in attendance_entries if entry.get('status') == 'Late')
         elements.append(
             Paragraph(
-                f'Total entries: {len(attendance_entries)} | Present: {present_count} | Absent: {absent_count} | Late: {late_count}',
+                f'Total entries: {len(attendance_entries)} | Absent: {absent_count} | Late: {late_count}',
                 body_style,
             )
         )

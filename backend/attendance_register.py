@@ -42,34 +42,30 @@ def get_daily_register(register_date: str, students: Iterable[dict]) -> list[dic
     if not isinstance(day_records, dict):
         day_records = {}
 
-    changed = False
+    register_entries: list[dict] = []
+
     for student in students:
         student_id = str(student.get('id') or '').strip()
         if not student_id:
             continue
 
-        if student_id not in day_records or not isinstance(day_records.get(student_id), dict):
-            day_records[student_id] = _default_entry(register_date, student)
-            changed = True
-            continue
+        stored_entry = day_records.get(student_id)
+        if isinstance(stored_entry, dict):
+            entry = deepcopy(stored_entry)
+            entry.setdefault('date', register_date)
+            entry.setdefault('studentId', student_id)
+            entry.setdefault('studentName', _student_name(student))
+            entry['className'] = str(student.get('className') or entry.get('className') or '').strip()
+            normalized_status = str(entry.get('status') or 'Present').strip().title()
+            entry['status'] = normalized_status if normalized_status in VALID_ATTENDANCE_STATUSES else 'Present'
+            entry['reason'] = str(entry.get('reason') or '').strip() if entry['status'] in {'Absent', 'Late'} else ''
+            entry.setdefault('createdAt', utc_now_iso())
+        else:
+            entry = _default_entry(register_date, student)
 
-        entry = day_records[student_id]
-        entry.setdefault('date', register_date)
-        entry.setdefault('studentId', student_id)
-        entry.setdefault('studentName', _student_name(student))
-        classroom_name = str(student.get('className') or entry.get('className') or '').strip()
-        if entry.get('className') != classroom_name:
-            entry['className'] = classroom_name
-            changed = True
-        entry.setdefault('status', 'Present')
-        entry.setdefault('reason', '')
-        entry.setdefault('createdAt', utc_now_iso())
+        register_entries.append(entry)
 
-    store[register_date] = day_records
-    if changed:
-        _save_store(store)
-
-    return sorted(day_records.values(), key=lambda item: item.get('studentName', ''))
+    return sorted(register_entries, key=lambda item: item.get('studentName', ''))
 
 
 def update_attendance_entry(register_date: str, student: dict, status: str, reason: str = '') -> dict:
@@ -87,6 +83,18 @@ def update_attendance_entry(register_date: str, student: dict, status: str, reas
     student_id = str(student.get('id') or '').strip()
     if not student_id:
         raise ValueError('Student id is required for attendance updates.')
+
+    if normalized_status == 'Present':
+        day_records.pop(student_id, None)
+        if day_records:
+            store[register_date] = day_records
+        else:
+            store.pop(register_date, None)
+        _save_store(store)
+
+        entry = _default_entry(register_date, student)
+        entry['updatedAt'] = utc_now_iso()
+        return entry
 
     entry = deepcopy(day_records.get(student_id) or _default_entry(register_date, student))
     entry['status'] = normalized_status
