@@ -84,14 +84,14 @@ const PARENT_ABSENT_REASON = 'Parent marked absent in app';
 const CLASSROOM_OPTIONS = ['All Classes', 'Sunshine Bunnies', 'Rainbow Cubs', 'Little Explorers'];
 const ROLE_OPTIONS = ['principal', 'teacher', 'viewer', 'parent'];
 const COMPLIANCE_FOLDERS = [
-  { key: 'evacuation_plan', label: 'Emergency Evacuation Plan', icon: '🚨', description: 'Fire and emergency evacuation routes and procedures' },
-  { key: 'fire_safety', label: 'Fire Safety Certificate', icon: '🔥', description: 'Annual fire safety inspection certificates' },
-  { key: 'health_safety', label: 'Health & Safety Policy', icon: '🏥', description: 'Health and safety policy documentation' },
-  { key: 'dsd_registration', label: 'DSD Registration Certificate', icon: '📋', description: 'Department of Social Development registration and renewals' },
-  { key: 'child_protection', label: 'Child Protection Policy', icon: '🛡️', description: 'Child protection and safeguarding policy documents' },
-  { key: 'first_aid', label: 'First Aid Records', icon: '⛑️', description: 'First aid qualifications and incident records' },
-  { key: 'nutrition_menu', label: 'Nutrition & Menu Plan', icon: '🥗', description: 'Approved menus and nutrition guidelines' },
-  { key: 'practitioner_register', label: 'Practitioner Registers', icon: '📝', description: 'Staff qualifications, registers, and attendance records' },
+  { key: 'evacuation_plan', label: 'Emergency Evacuation Plan', description: 'Fire and emergency evacuation routes and procedures' },
+  { key: 'fire_safety', label: 'Fire Safety Certificate', description: 'Annual fire safety inspection certificates' },
+  { key: 'health_safety', label: 'Health & Safety Policy', description: 'Health and safety policy documentation' },
+  { key: 'dsd_registration', label: 'DSD Registration Certificate', description: 'Department of Social Development registration and renewals' },
+  { key: 'child_protection', label: 'Child Protection Policy', description: 'Child protection and safeguarding policy documents' },
+  { key: 'first_aid', label: 'First Aid Records', description: 'First aid qualifications and incident records' },
+  { key: 'nutrition_menu', label: 'Nutrition & Menu Plan', description: 'Approved menus and nutrition guidelines' },
+  { key: 'practitioner_register', label: 'Practitioner Registers', description: 'Staff qualifications, registers, and attendance records' },
 ];
 const MANAGEABLE_PERMISSION_OPTIONS = [
   { key: 'canEditStudents', label: 'Edit students' },
@@ -1048,7 +1048,7 @@ function HomeScreen({ navigation, onLogout, loginIdentity }) {
           style={styles.moduleCard}
           onPress={() => navigation.navigate('Activities')}
         >
-          <Text style={styles.moduleTitle}>🎨 Activities</Text>
+          <Text style={styles.moduleTitle}>Activities</Text>
           <Text style={styles.moduleSubtitle}>
             {isParentAccount
               ? 'View activities done in your child\'s class'
@@ -1071,7 +1071,7 @@ function HomeScreen({ navigation, onLogout, loginIdentity }) {
             style={styles.moduleCard}
             onPress={() => navigation.navigate('ComplianceDocuments')}
           >
-            <Text style={styles.moduleTitle}>📁 Compliance</Text>
+            <Text style={styles.moduleTitle}>Compliance</Text>
             <Text style={styles.moduleSubtitle}>Evacuation plans, DSD registration, health & safety, and other required ECD compliance documents</Text>
           </TouchableOpacity>
         ) : null}
@@ -1465,10 +1465,10 @@ function StudentDirectoryScreen({ navigation }) {
               >
                 <View style={styles.folderHeaderRow}>
                   <View style={styles.folderTextWrap}>
-                    <Text style={styles.moduleTitle}>📁 {group.className}</Text>
+                    <Text style={styles.moduleTitle}>{group.className}</Text>
                     <Text style={styles.moduleSubtitle}>{group.learners.length} learners • Tap to open</Text>
                   </View>
-                  <Text style={styles.folderToggleText}>›</Text>
+                  <Text style={styles.folderToggleText}>Open</Text>
                 </View>
               </TouchableOpacity>
             ))}
@@ -1719,7 +1719,7 @@ function StudentClassFolderScreen({ route, navigation }) {
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={styles.formContainer}>
-        <Text style={styles.title}>📁 {className}</Text>
+        <Text style={styles.title}>{className}</Text>
         <Text style={styles.subtitle}>Students in this class with quick daily logging</Text>
         <Text style={styles.helperText}>Use each learner card to set attendance status and quickly log incidents or medicine without leaving Students.</Text>
 
@@ -2440,10 +2440,10 @@ function AttendanceRegisterScreen({ navigation }) {
           >
             <View style={styles.folderHeaderRow}>
               <View style={styles.folderTextWrap}>
-                <Text style={styles.moduleTitle}>📁 {group.className}</Text>
+                <Text style={styles.moduleTitle}>{group.className}</Text>
                 <Text style={styles.moduleSubtitle}>{group.learners.length} learners • Tap to open</Text>
               </View>
-              <Text style={styles.folderToggleText}>›</Text>
+              <Text style={styles.folderToggleText}>Open</Text>
             </View>
           </TouchableOpacity>
         ))}
@@ -2543,7 +2543,7 @@ function AttendanceClassFolderScreen({ route, navigation }) {
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={styles.formContainer}>
-        <Text style={styles.title}>📁 {className}</Text>
+        <Text style={styles.title}>{className}</Text>
         <Text style={styles.subtitle}>Attendance for {registerDate}</Text>
         <Text style={styles.helperText}>Present is assumed. Only `Late` or `Absent` entries are logged.</Text>
 
@@ -3167,7 +3167,7 @@ function ActivitiesScreen({ navigation }) {
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={styles.formContainer}>
-        <Text style={styles.title}>🎨 Activities</Text>
+        <Text style={styles.title}>Activities</Text>
         <Text style={styles.subtitle}>
           {isParentAccount
             ? 'Activities completed in your child\'s class'
@@ -3213,7 +3213,6 @@ function ActivitiesScreen({ navigation }) {
 
         {!loading && activities.length === 0 ? (
           <View style={styles.complianceEmptyState}>
-            <Text style={styles.complianceEmptyIcon}>🎨</Text>
             <Text style={styles.complianceEmptyText}>No activities found.</Text>
             {isParentAccount ? (
               <Text style={styles.complianceEmptyHint}>No activities have been logged yet for your child\'s class.</Text>
@@ -3243,19 +3242,19 @@ function ActivitiesScreen({ navigation }) {
               </View>
 
               {activity.duur ? (
-                <Text style={styles.activityCardDetail}>⏱ {activity.duur} minute</Text>
+                <Text style={styles.activityCardDetail}>Duration: {activity.duur} minute</Text>
               ) : null}
               {activity.tema ? (
-                <Text style={styles.activityCardDetail}>🏷 Theme: {activity.tema}</Text>
+                <Text style={styles.activityCardDetail}>Theme: {activity.tema}</Text>
               ) : null}
               {activity.ouderdomsGroep && activity.ouderdomsGroep.length > 0 ? (
-                <Text style={styles.activityCardDetail}>👶 {activity.ouderdomsGroep.join(', ')}</Text>
+                <Text style={styles.activityCardDetail}>Age group: {activity.ouderdomsGroep.join(', ')}</Text>
               ) : null}
               {activity.doel ? (
                 <Text style={styles.activityCardBody} numberOfLines={isParentAccount ? 2 : 3}>{activity.doel}</Text>
               ) : null}
               {isParentAccount ? (
-                <Text style={styles.activityCardFooter}>Tap to view details ›</Text>
+                <Text style={styles.activityCardFooter}>Tap to view details</Text>
               ) : (
                 activity.loggedByName ? (
                   <Text style={styles.activityCardFooter}>Logged by {activity.loggedByName}</Text>
@@ -3678,7 +3677,7 @@ function LogActivityScreen({ navigation, route }) {
         <Text style={styles.formSectionLabel}>File upload (optional)</Text>
         <TouchableOpacity style={styles.activityFilePickButton} onPress={handlePickFile}>
           <Text style={styles.activityFilePickButtonText}>
-            {fileAsset ? `📎 ${fileAsset.name}` : '+ Select image or PDF'}
+            {fileAsset ? fileAsset.name : '+ Select image or PDF'}
           </Text>
         </TouchableOpacity>
         {fileAsset ? (
@@ -3799,7 +3798,7 @@ function ActivityDetailScreen({ route }) {
               style={styles.activityLogButton}
               onPress={() => Linking.openURL(activity.fileUrl).catch(() => Alert.alert('Could not open file', 'The file could not be opened.'))}
             >
-              <Text style={styles.activityLogButtonText}>📎 {activity.fileName || 'Open file'}</Text>
+              <Text style={styles.activityLogButtonText}>{activity.fileName || 'Open file'}</Text>
             </TouchableOpacity>
           </View>
         ) : null}
@@ -3843,14 +3842,11 @@ function ComplianceDocumentsScreen({ navigation }) {
             style={styles.complianceFolderCard}
             onPress={() => navigation.navigate('ComplianceDocumentFolder', { folder })}
           >
-            <View style={styles.complianceFolderIconWrap}>
-              <Text style={styles.complianceFolderIcon}>{folder.icon}</Text>
-            </View>
             <View style={styles.complianceFolderTextWrap}>
               <Text style={styles.complianceFolderLabel}>{folder.label}</Text>
               <Text style={styles.complianceFolderDesc}>{folder.description}</Text>
             </View>
-            <Text style={styles.complianceFolderChevron}>›</Text>
+            <Text style={styles.complianceFolderChevron}>Open</Text>
           </TouchableOpacity>
         ))}
       </ScrollView>
@@ -4435,53 +4431,58 @@ function StudentFormScreen({ navigation, route }) {
 const styles = StyleSheet.create({
   loginScreenContainer: {
     flex: 1,
-    backgroundColor: '#F4F7FB',
+    backgroundColor: '#F8F9FA',
     justifyContent: 'center',
-    padding: 20,
+    padding: 24,
   },
   loginCard: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    padding: 20,
+    borderRadius: 8,
+    padding: 24,
     borderWidth: 1,
-    borderColor: '#D9E2EC',
+    borderColor: '#E8EAED',
+    shadowColor: '#000000',
+    shadowOpacity: 0.08,
+    shadowRadius: 3,
+    shadowOffset: { width: 0, height: 1 },
+    elevation: 1,
   },
   loginTitle: {
-    fontSize: 28,
-    fontWeight: '800',
-    color: '#102A43',
+    fontSize: 26,
+    fontWeight: '600',
+    color: '#202124',
     marginBottom: 8,
   },
   loginSubtitle: {
     fontSize: 15,
-    color: '#486581',
+    color: '#3C4043',
     marginBottom: 14,
-    lineHeight: 20,
+    lineHeight: 24,
   },
   loginButton: {
     marginTop: 4,
-    backgroundColor: '#126782',
-    borderRadius: 10,
+    backgroundColor: '#1A73E8',
+    borderRadius: 6,
     alignItems: 'center',
     paddingVertical: 13,
   },
   loginHint: {
     marginTop: 12,
-    color: '#486581',
+    color: '#80868B',
     textAlign: 'center',
     fontSize: 13,
   },
   container: {
     flex: 1,
-    backgroundColor: '#F4F7FB',
+    backgroundColor: '#F8F9FA',
   },
   screenContainer: {
     flex: 1,
-    padding: 20,
+    padding: 24,
   },
   formContainer: {
-    padding: 20,
-    paddingBottom: 30,
+    padding: 24,
+    paddingBottom: 40,
   },
   homeHeaderRow: {
     flexDirection: 'row',
@@ -4493,36 +4494,44 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   logoutButton: {
-    backgroundColor: '#E4E7EB',
-    borderRadius: 10,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#E8EAED',
     paddingVertical: 10,
-    paddingHorizontal: 12,
+    paddingHorizontal: 16,
+    minHeight: 40,
+    justifyContent: 'center',
   },
   logoutButtonText: {
-    color: '#102A43',
-    fontWeight: '700',
+    color: '#3C4043',
+    fontWeight: '600',
   },
   title: {
     fontSize: 28,
-    fontWeight: '700',
-    color: '#102A43',
+    fontWeight: '600',
+    color: '#202124',
   },
   subtitle: {
-    fontSize: 16,
-    color: '#243B53',
+    fontSize: 15,
+    color: '#3C4043',
     marginBottom: 8,
+    lineHeight: 24,
   },
   helperText: {
-    color: '#486581',
+    color: '#80868B',
     marginBottom: 12,
-    lineHeight: 20,
+    lineHeight: 24,
+    fontSize: 14,
   },
   addStudentButton: {
     alignSelf: 'flex-start',
-    backgroundColor: '#0B7285',
-    borderRadius: 10,
-    paddingVertical: 10,
-    paddingHorizontal: 14,
+    backgroundColor: '#1A73E8',
+    borderRadius: 6,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    minHeight: 44,
+    justifyContent: 'center',
     marginBottom: 12,
   },
   addStudentButtonText: {
@@ -4532,21 +4541,27 @@ const styles = StyleSheet.create({
   moduleCard: {
     marginTop: 8,
     backgroundColor: '#FFFFFF',
-    borderRadius: 12,
-    padding: 16,
+    borderRadius: 8,
+    padding: 24,
     borderWidth: 1,
-    borderColor: '#D9E2EC',
+    borderColor: '#E8EAED',
+    shadowColor: '#000000',
+    shadowOpacity: 0.08,
+    shadowRadius: 3,
+    shadowOffset: { width: 0, height: 1 },
+    elevation: 1,
   },
   moduleTitle: {
     fontSize: 20,
-    fontWeight: '800',
-    color: '#102A43',
+    fontWeight: '600',
+    color: '#202124',
     marginBottom: 4,
   },
   moduleSubtitle: {
-    color: '#486581',
+    color: '#3C4043',
     fontSize: 14,
-    fontWeight: '500',
+    fontWeight: '400',
+    lineHeight: 22,
   },
   folderHeaderRow: {
     flexDirection: 'row',
@@ -4558,9 +4573,11 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   folderToggleText: {
-    fontSize: 28,
-    fontWeight: '800',
-    color: '#126782',
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#1A73E8',
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
   },
   folderContentCard: {
     marginTop: -4,
@@ -4570,22 +4587,23 @@ const styles = StyleSheet.create({
   searchInput: {
     backgroundColor: '#FFFFFF',
     borderWidth: 1,
-    borderColor: '#BCCCDC',
-    borderRadius: 10,
+    borderColor: '#E8EAED',
+    borderRadius: 6,
     paddingHorizontal: 12,
     paddingVertical: 12,
-    marginBottom: 12,
-    fontSize: 16,
+    marginBottom: 16,
+    fontSize: 15,
+    color: '#3C4043',
   },
   listContent: {
     paddingBottom: 14,
   },
   classSectionCard: {
-    backgroundColor: '#F8FBFF',
-    borderRadius: 14,
-    padding: 12,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 8,
+    padding: 16,
     borderWidth: 1,
-    borderColor: '#D9E2EC',
+    borderColor: '#E8EAED',
     marginBottom: 12,
   },
   classHeaderRow: {
@@ -4597,46 +4615,58 @@ const styles = StyleSheet.create({
   },
   classSectionTitle: {
     fontSize: 18,
-    fontWeight: '800',
-    color: '#102A43',
+    fontWeight: '600',
+    color: '#202124',
   },
   classCountText: {
-    color: '#486581',
-    fontWeight: '700',
+    color: '#80868B',
+    fontWeight: '600',
   },
   studentItem: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 10,
+    borderRadius: 8,
+    padding: 20,
+    marginBottom: 12,
     borderWidth: 1,
-    borderColor: '#D9E2EC',
+    borderColor: '#E8EAED',
+    shadowColor: '#000000',
+    shadowOpacity: 0.08,
+    shadowRadius: 3,
+    shadowOffset: { width: 0, height: 1 },
+    elevation: 1,
   },
   sectionCard: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 12,
-    padding: 15,
+    borderRadius: 8,
+    padding: 20,
     borderWidth: 1,
-    borderColor: '#D9E2EC',
-    marginBottom: 12,
+    borderColor: '#E8EAED',
+    marginBottom: 16,
+    shadowColor: '#000000',
+    shadowOpacity: 0.08,
+    shadowRadius: 3,
+    shadowOffset: { width: 0, height: 1 },
+    elevation: 1,
   },
   studentName: {
     fontSize: 18,
-    color: '#102A43',
-    fontWeight: '700',
+    color: '#202124',
+    fontWeight: '600',
   },
   studentClassText: {
     marginTop: 4,
-    color: '#0B7285',
-    fontWeight: '700',
+    color: '#80868B',
+    fontWeight: '500',
+    fontSize: 14,
   },
   tapHint: {
     marginTop: 5,
-    color: '#486581',
-    fontWeight: '600',
+    color: '#80868B',
+    fontWeight: '400',
+    fontSize: 13,
   },
   statusText: {
-    color: '#243B53',
+    color: '#3C4043',
     marginBottom: 10,
   },
   errorText: {
@@ -4646,17 +4676,19 @@ const styles = StyleSheet.create({
   },
   profileName: {
     fontSize: 29,
-    color: '#102A43',
-    fontWeight: '800',
+    color: '#202124',
+    fontWeight: '600',
     marginBottom: 10,
   },
   editStudentButton: {
     alignSelf: 'flex-start',
-    marginBottom: 12,
-    backgroundColor: '#4C6EF5',
-    borderRadius: 10,
-    paddingVertical: 10,
-    paddingHorizontal: 14,
+    marginBottom: 16,
+    backgroundColor: '#1A73E8',
+    borderRadius: 6,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    minHeight: 44,
+    justifyContent: 'center',
   },
   editStudentButtonText: {
     color: '#FFFFFF',
@@ -4669,55 +4701,70 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
   },
   quickLogButton: {
-    backgroundColor: '#126782',
-    borderRadius: 10,
-    paddingVertical: 9,
-    paddingHorizontal: 12,
+    backgroundColor: '#1A73E8',
+    borderRadius: 6,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    minHeight: 44,
+    justifyContent: 'center',
   },
   quickLogButtonText: {
     color: '#FFFFFF',
     fontWeight: '700',
   },
   quickLogButtonSecondary: {
-    backgroundColor: '#E4E7EB',
-    borderRadius: 10,
-    paddingVertical: 9,
-    paddingHorizontal: 12,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#E8EAED',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    minHeight: 44,
+    justifyContent: 'center',
   },
   quickLogButtonSecondaryText: {
-    color: '#102A43',
-    fontWeight: '700',
+    color: '#3C4043',
+    fontWeight: '600',
   },
   undoAbsentButton: {
     marginTop: 8,
     alignSelf: 'flex-start',
-    backgroundColor: '#B91C1C',
-    borderRadius: 10,
-    paddingVertical: 10,
-    paddingHorizontal: 14,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#E8EAED',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    minHeight: 44,
+    justifyContent: 'center',
   },
   undoAbsentButtonText: {
-    color: '#FFFFFF',
-    fontWeight: '700',
+    color: '#3C4043',
+    fontWeight: '600',
   },
   card: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 12,
-    padding: 15,
+    borderRadius: 8,
+    padding: 24,
     borderWidth: 1,
-    borderColor: '#D9E2EC',
-    marginBottom: 12,
+    borderColor: '#E8EAED',
+    marginBottom: 16,
+    shadowColor: '#000000',
+    shadowOpacity: 0.08,
+    shadowRadius: 3,
+    shadowOffset: { width: 0, height: 1 },
+    elevation: 1,
   },
   sectionTitle: {
     fontSize: 17,
-    fontWeight: '700',
+    fontWeight: '600',
     marginTop: 16,
-    marginBottom: 10,
-    color: '#102A43',
+    marginBottom: 8,
+    color: '#202124',
   },
   contactButton: {
-    backgroundColor: '#126782',
-    borderRadius: 10,
+    backgroundColor: '#1A73E8',
+    borderRadius: 6,
     paddingVertical: 12,
     paddingHorizontal: 12,
     marginBottom: 8,
@@ -4727,8 +4774,8 @@ const styles = StyleSheet.create({
   },
   contactButtonText: {
     color: '#FFFFFF',
-    fontWeight: '700',
-    fontSize: 15,
+    fontWeight: '600',
+    fontSize: 14,
   },
   allergyAlertCard: {
     backgroundColor: '#FFF3E8',
@@ -4745,14 +4792,15 @@ const styles = StyleSheet.create({
     fontSize: 16,
   },
   vaultText: {
-    fontSize: 16,
-    color: '#102A43',
+    fontSize: 15,
+    color: '#3C4043',
     marginBottom: 7,
+    lineHeight: 24,
   },
   vaultToggleButton: {
     marginTop: 10,
-    backgroundColor: '#334E68',
-    borderRadius: 10,
+    backgroundColor: '#1A73E8',
+    borderRadius: 6,
     paddingVertical: 12,
     alignItems: 'center',
   },
@@ -4768,24 +4816,27 @@ const styles = StyleSheet.create({
   },
   modalCard: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 12,
-    padding: 18,
+    borderRadius: 8,
+    padding: 24,
+    borderWidth: 1,
+    borderColor: '#E8EAED',
   },
   modalTitle: {
     fontSize: 20,
-    fontWeight: '800',
-    color: '#102A43',
+    fontWeight: '600',
+    color: '#202124',
     marginBottom: 8,
   },
   modalText: {
     fontSize: 14,
-    color: '#334E68',
+    color: '#3C4043',
     marginBottom: 12,
+    lineHeight: 22,
   },
   pinInput: {
     borderWidth: 1,
-    borderColor: '#BCCCDC',
-    borderRadius: 10,
+    borderColor: '#E8EAED',
+    borderRadius: 6,
     paddingHorizontal: 12,
     paddingVertical: 10,
     fontSize: 16,
@@ -4794,23 +4845,29 @@ const styles = StyleSheet.create({
   modalButtonsRow: {
     flexDirection: 'row',
     justifyContent: 'flex-end',
-    gap: 8,
+    gap: 12,
   },
   modalButtonSecondary: {
-    backgroundColor: '#E4E7EB',
-    borderRadius: 10,
-    paddingVertical: 10,
-    paddingHorizontal: 14,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#E8EAED',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    minHeight: 44,
+    justifyContent: 'center',
   },
   modalButtonSecondaryText: {
-    color: '#102A43',
-    fontWeight: '700',
+    color: '#3C4043',
+    fontWeight: '600',
   },
   modalButtonPrimary: {
-    backgroundColor: '#126782',
-    borderRadius: 10,
-    paddingVertical: 10,
-    paddingHorizontal: 14,
+    backgroundColor: '#1A73E8',
+    borderRadius: 6,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    minHeight: 44,
+    justifyContent: 'center',
   },
   modalButtonPrimaryText: {
     color: '#FFFFFF',
@@ -4818,25 +4875,27 @@ const styles = StyleSheet.create({
   },
   formTitle: {
     fontSize: 24,
-    color: '#102A43',
-    fontWeight: '800',
+    color: '#202124',
+    fontWeight: '600',
     marginBottom: 14,
   },
   formSectionLabel: {
-    color: '#102A43',
-    fontWeight: '700',
+    color: '#80868B',
+    fontWeight: '600',
     marginBottom: 6,
     marginTop: 4,
+    fontSize: 13,
   },
   formInput: {
     backgroundColor: '#FFFFFF',
     borderWidth: 1,
-    borderColor: '#BCCCDC',
-    borderRadius: 10,
+    borderColor: '#E8EAED',
+    borderRadius: 6,
     paddingHorizontal: 12,
     paddingVertical: 11,
-    marginBottom: 10,
+    marginBottom: 12,
     fontSize: 15,
+    color: '#3C4043',
   },
   reasonInput: {
     minHeight: 48,
@@ -4844,19 +4903,21 @@ const styles = StyleSheet.create({
   },
   saveStudentButton: {
     marginTop: 8,
-    marginBottom: 12,
-    backgroundColor: '#0B7285',
-    borderRadius: 10,
+    marginBottom: 16,
+    backgroundColor: '#1A73E8',
+    borderRadius: 6,
     alignItems: 'center',
-    paddingVertical: 13,
+    paddingVertical: 12,
+    minHeight: 44,
+    justifyContent: 'center',
   },
   saveStudentButtonDisabled: {
     backgroundColor: '#94A3B8',
   },
   saveStudentButtonText: {
     color: '#FFFFFF',
-    fontWeight: '700',
-    fontSize: 16,
+    fontWeight: '600',
+    fontSize: 15,
   },
   itemHeaderRow: {
     flexDirection: 'row',
@@ -4865,7 +4926,7 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   statusBadge: {
-    borderRadius: 999,
+    borderRadius: 6,
     paddingHorizontal: 12,
     paddingVertical: 6,
   },
@@ -4879,8 +4940,8 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFE3E3',
   },
   statusBadgeText: {
-    fontWeight: '700',
-    color: '#102A43',
+    fontWeight: '600',
+    color: '#3C4043',
   },
   actionRow: {
     flexDirection: 'row',
@@ -4888,34 +4949,44 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
   },
   statusActionButton: {
-    backgroundColor: '#E4E7EB',
-    borderRadius: 10,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#E8EAED',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    minHeight: 44,
+    justifyContent: 'center',
   },
   statusActionButtonSelected: {
-    backgroundColor: '#126782',
+    backgroundColor: '#1A73E8',
+    borderColor: '#1A73E8',
   },
   statusActionButtonText: {
-    color: '#102A43',
-    fontWeight: '700',
+    color: '#3C4043',
+    fontWeight: '600',
   },
   chipContainer: {
     paddingBottom: 10,
     gap: 8,
   },
   chipButton: {
-    backgroundColor: '#E4E7EB',
-    borderRadius: 999,
-    paddingVertical: 8,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#E8EAED',
+    paddingVertical: 10,
     paddingHorizontal: 12,
     marginRight: 8,
+    minHeight: 40,
+    justifyContent: 'center',
   },
   chipButtonSelected: {
-    backgroundColor: '#126782',
+    backgroundColor: '#1A73E8',
+    borderColor: '#1A73E8',
   },
   chipButtonText: {
-    color: '#102A43',
+    color: '#3C4043',
     fontWeight: '600',
   },
   selectedActionText: {
@@ -4929,27 +5000,27 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: '#FFFFFF',
     borderWidth: 1,
-    borderColor: '#BCCCDC',
-    borderRadius: 10,
+    borderColor: '#E8EAED',
+    borderRadius: 6,
     paddingRight: 8,
-    marginBottom: 12,
+    marginBottom: 16,
   },
   autocompleteTextInput: {
     flex: 1,
     paddingHorizontal: 12,
     paddingVertical: 12,
-    color: '#102A43',
+    color: '#3C4043',
   },
   clearSearchButton: {
     width: 30,
     height: 30,
-    borderRadius: 15,
+    borderRadius: 6,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#E9EEF5',
+    backgroundColor: '#F1F3F4',
   },
   clearSearchButtonText: {
-    color: '#486581',
+    color: '#80868B',
     fontSize: 18,
     fontWeight: '800',
     lineHeight: 20,
@@ -4957,8 +5028,8 @@ const styles = StyleSheet.create({
   autocompleteResults: {
     backgroundColor: '#FFFFFF',
     borderWidth: 1,
-    borderColor: '#D9E2EC',
-    borderRadius: 10,
+    borderColor: '#E8EAED',
+    borderRadius: 6,
     marginTop: -4,
     marginBottom: 8,
     overflow: 'hidden',
@@ -4968,26 +5039,28 @@ const styles = StyleSheet.create({
   },
   autocompleteItem: {
     paddingHorizontal: 12,
-    paddingVertical: 10,
+    paddingVertical: 12,
     borderBottomWidth: 1,
-    borderBottomColor: '#EEF2F6',
+    borderBottomColor: '#E8EAED',
+    minHeight: 48,
+    justifyContent: 'center',
   },
   autocompleteName: {
-    color: '#102A43',
-    fontWeight: '700',
+    color: '#202124',
+    fontWeight: '600',
   },
   autocompleteMeta: {
-    color: '#486581',
+    color: '#80868B',
     marginTop: 2,
     fontSize: 12,
   },
   autocompleteEmpty: {
-    color: '#486581',
+    color: '#80868B',
     paddingHorizontal: 12,
     paddingVertical: 12,
   },
   selectedLearnerText: {
-    color: '#486581',
+    color: '#80868B',
     fontSize: 13,
     marginTop: -2,
     marginBottom: 4,
@@ -5006,19 +5079,24 @@ const styles = StyleSheet.create({
   },
   timelineCard: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 12,
-    padding: 14,
+    borderRadius: 8,
+    padding: 20,
     borderWidth: 1,
-    borderColor: '#D9E2EC',
-    marginBottom: 10,
+    borderColor: '#E8EAED',
+    marginBottom: 12,
+    shadowColor: '#000000',
+    shadowOpacity: 0.08,
+    shadowRadius: 3,
+    shadowOffset: { width: 0, height: 1 },
+    elevation: 1,
   },
   timelineMeta: {
-    color: '#486581',
+    color: '#80868B',
     marginTop: 4,
     marginBottom: 8,
   },
   timelineText: {
-    color: '#102A43',
+    color: '#3C4043',
     marginBottom: 6,
     lineHeight: 20,
   },
@@ -5028,29 +5106,34 @@ const styles = StyleSheet.create({
     marginTop: 6,
   },
   infoBox: {
-    backgroundColor: '#E8F1FF',
-    borderRadius: 12,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E8EAED',
     padding: 12,
-    marginBottom: 12,
+    marginBottom: 16,
   },
   infoText: {
-    color: '#1D4ED8',
-    lineHeight: 20,
+    color: '#3C4043',
+    lineHeight: 22,
+    fontSize: 14,
   },
   reportButton: {
     marginTop: 8,
-    backgroundColor: '#4C6EF5',
-    borderRadius: 10,
+    backgroundColor: '#1A73E8',
+    borderRadius: 6,
     alignItems: 'center',
-    paddingVertical: 13,
+    paddingVertical: 12,
+    minHeight: 44,
+    justifyContent: 'center',
   },
   complianceFolderCard: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 12,
+    borderRadius: 8,
     borderWidth: 1,
-    borderColor: '#D9E2EC',
+    borderColor: '#E8EAED',
     padding: 14,
-    marginBottom: 10,
+    marginBottom: 12,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
@@ -5058,8 +5141,8 @@ const styles = StyleSheet.create({
   complianceFolderIconWrap: {
     width: 44,
     height: 44,
-    borderRadius: 10,
-    backgroundColor: '#EEF4FF',
+    borderRadius: 6,
+    backgroundColor: '#F1F3F4',
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -5071,19 +5154,21 @@ const styles = StyleSheet.create({
   },
   complianceFolderLabel: {
     fontSize: 15,
-    fontWeight: '700',
-    color: '#102A43',
+    fontWeight: '600',
+    color: '#202124',
     marginBottom: 2,
   },
   complianceFolderDesc: {
     fontSize: 12,
-    color: '#486581',
+    color: '#80868B',
     lineHeight: 16,
   },
   complianceFolderChevron: {
-    fontSize: 22,
-    color: '#7C8FA3',
-    fontWeight: '300',
+    fontSize: 13,
+    color: '#1A73E8',
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
   },
   complianceEmptyState: {
     alignItems: 'center',
@@ -5096,20 +5181,20 @@ const styles = StyleSheet.create({
   complianceEmptyText: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#486581',
+    color: '#3C4043',
     marginBottom: 6,
   },
   complianceEmptyHint: {
     fontSize: 13,
-    color: '#7C8FA3',
+    color: '#80868B',
     textAlign: 'center',
   },
   complianceDocCard: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 12,
+    borderRadius: 8,
     borderWidth: 1,
-    borderColor: '#D9E2EC',
-    marginBottom: 10,
+    borderColor: '#E8EAED',
+    marginBottom: 12,
     overflow: 'hidden',
   },
   complianceDocMain: {
@@ -5127,71 +5212,73 @@ const styles = StyleSheet.create({
   },
   complianceDocName: {
     fontSize: 14,
-    fontWeight: '700',
-    color: '#102A43',
+    fontWeight: '600',
+    color: '#202124',
     marginBottom: 4,
   },
   complianceDocMeta: {
     fontSize: 12,
-    color: '#486581',
+    color: '#80868B',
     marginBottom: 2,
   },
   complianceDocNotes: {
     fontSize: 12,
-    color: '#102A43',
+    color: '#3C4043',
     marginTop: 4,
     fontStyle: 'italic',
   },
   complianceDocActions: {
     flexDirection: 'row',
     borderTopWidth: 1,
-    borderTopColor: '#EEF2F6',
+    borderTopColor: '#E8EAED',
   },
   complianceOpenBtn: {
     flex: 1,
     paddingVertical: 10,
     alignItems: 'center',
-    backgroundColor: '#F8FAFC',
+    backgroundColor: '#F8F9FA',
   },
   complianceOpenBtnText: {
     fontSize: 13,
     fontWeight: '600',
-    color: '#126782',
+    color: '#1A73E8',
   },
   complianceDeleteBtn: {
     paddingVertical: 10,
     paddingHorizontal: 20,
     alignItems: 'center',
-    backgroundColor: '#FFF5F5',
+    backgroundColor: '#FFFFFF',
     borderLeftWidth: 1,
-    borderLeftColor: '#EEF2F6',
+    borderLeftColor: '#E8EAED',
   },
   complianceDeleteBtnText: {
     fontSize: 13,
     fontWeight: '600',
-    color: '#C92A2A',
+    color: '#3C4043',
   },
   complianceUploadSection: {
     marginTop: 16,
-    backgroundColor: '#F8FAFC',
-    borderRadius: 12,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 8,
     borderWidth: 1,
-    borderColor: '#D9E2EC',
-    padding: 14,
+    borderColor: '#E8EAED',
+    padding: 20,
   },
   complianceUploadTitle: {
     fontSize: 15,
-    fontWeight: '700',
-    color: '#102A43',
+    fontWeight: '600',
+    color: '#202124',
     marginBottom: 10,
   },
   complianceUploadBtn: {
-    backgroundColor: '#126782',
-    borderRadius: 10,
+    backgroundColor: '#1A73E8',
+    borderRadius: 6,
     alignItems: 'center',
-    paddingVertical: 13,
+    paddingVertical: 12,
+    minHeight: 44,
+    justifyContent: 'center',
     marginTop: 4,
-    marginBottom: 6,
+    marginBottom: 8,
   },
   complianceUploadBtnText: {
     color: '#FFFFFF',
@@ -5200,8 +5287,8 @@ const styles = StyleSheet.create({
   },
   dateRangeLabel: {
     fontSize: 14,
-    fontWeight: '700',
-    color: '#102A43',
+    fontWeight: '600',
+    color: '#202124',
     marginTop: 16,
     marginBottom: 12,
   },
@@ -5216,16 +5303,16 @@ const styles = StyleSheet.create({
   datePickerLabel: {
     fontSize: 12,
     fontWeight: '600',
-    color: '#486581',
+    color: '#80868B',
     marginBottom: 6,
     textAlign: 'center',
   },
   datePickerScrollBound: {
     height: 180,
-    backgroundColor: '#F8FAFC',
-    borderRadius: 10,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 6,
     borderWidth: 1,
-    borderColor: '#D9E2EC',
+    borderColor: '#E8EAED',
     overflow: 'hidden',
     position: 'relative',
   },
@@ -5235,12 +5322,12 @@ const styles = StyleSheet.create({
   datePickerItem: {
     fontSize: 16,
     fontWeight: '500',
-    color: '#7C8FA3',
+    color: '#80868B',
   },
   datePickerItemSelected: {
     fontSize: 18,
     fontWeight: '700',
-    color: '#102A43',
+    color: '#202124',
   },
   datePickerOverlay: {
     position: 'absolute',
@@ -5260,7 +5347,7 @@ const styles = StyleSheet.create({
   compactDateRangeContainer: {
     flexDirection: 'row',
     gap: 12,
-    marginVertical: 12,
+    marginVertical: 16,
   },
   compactDateFieldWrapper: {
     flex: 1,
@@ -5268,14 +5355,14 @@ const styles = StyleSheet.create({
   compactDateLabel: {
     fontSize: 13,
     fontWeight: '600',
-    color: '#486581',
+    color: '#80868B',
     marginBottom: 6,
   },
   compactDateField: {
     backgroundColor: '#FFFFFF',
     borderWidth: 1,
-    borderColor: '#D9E2EC',
-    borderRadius: 8,
+    borderColor: '#E8EAED',
+    borderRadius: 6,
     paddingVertical: 12,
     paddingHorizontal: 10,
     justifyContent: 'center',
@@ -5283,7 +5370,7 @@ const styles = StyleSheet.create({
   compactDateFieldText: {
     fontSize: 14,
     fontWeight: '500',
-    color: '#102A43',
+    color: '#3C4043',
   },
   datePickerBackdrop: {
     flex: 1,
@@ -5293,15 +5380,15 @@ const styles = StyleSheet.create({
   },
   datePickerModalCard: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 12,
-    padding: 16,
+    borderRadius: 8,
+    padding: 20,
     width: '85%',
     maxWidth: 350,
   },
   datePickerModalTitle: {
     fontSize: 16,
-    fontWeight: '700',
-    color: '#102A43',
+    fontWeight: '600',
+    color: '#202124',
     marginBottom: 16,
     textAlign: 'center',
   },
@@ -5319,18 +5406,20 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     paddingHorizontal: 16,
     borderRadius: 6,
-    backgroundColor: '#E4E7EB',
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E8EAED',
   },
   datePickerModalCancelText: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#486581',
+    color: '#3C4043',
   },
   datePickerModalConfirmBtn: {
     paddingVertical: 10,
     paddingHorizontal: 20,
     borderRadius: 6,
-    backgroundColor: '#126782',
+    backgroundColor: '#1A73E8',
   },
   datePickerModalConfirmText: {
     fontSize: 14,
@@ -5343,16 +5432,16 @@ const styles = StyleSheet.create({
   compactDatePickerLabel: {
     fontSize: 11,
     fontWeight: '600',
-    color: '#486581',
+    color: '#80868B',
     marginBottom: 6,
     textAlign: 'center',
   },
   compactDatePickerScrollBound: {
     height: 120,
-    backgroundColor: '#F8FAFC',
-    borderRadius: 8,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 6,
     borderWidth: 1,
-    borderColor: '#D9E2EC',
+    borderColor: '#E8EAED',
     overflow: 'hidden',
     position: 'relative',
   },
@@ -5362,12 +5451,12 @@ const styles = StyleSheet.create({
   compactDatePickerItem: {
     fontSize: 13,
     fontWeight: '500',
-    color: '#7C8FA3',
+    color: '#80868B',
   },
   compactDatePickerItemSelected: {
     fontSize: 15,
     fontWeight: '700',
-    color: '#102A43',
+    color: '#202124',
   },
   compactDatePickerOverlay: {
     position: 'absolute',
@@ -5390,7 +5479,7 @@ const styles = StyleSheet.create({
   },
   successBanner: {
     backgroundColor: '#DCFCE7',
-    borderRadius: 10,
+    borderRadius: 6,
     padding: 14,
     marginBottom: 12,
     alignItems: 'center',
@@ -5404,33 +5493,35 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 8,
-    marginBottom: 14,
+    marginBottom: 16,
   },
   activityFilterChip: {
     paddingHorizontal: 12,
     paddingVertical: 7,
-    borderRadius: 20,
-    backgroundColor: '#EEF4FF',
+    borderRadius: 6,
+    backgroundColor: '#FFFFFF',
     borderWidth: 1,
-    borderColor: '#D9E2EC',
+    borderColor: '#E8EAED',
   },
   activityFilterChipActive: {
-    backgroundColor: '#126782',
-    borderColor: '#126782',
+    backgroundColor: '#E8F0FE',
+    borderColor: '#1A73E8',
   },
   activityFilterChipText: {
     fontSize: 13,
     fontWeight: '600',
-    color: '#486581',
+    color: '#3C4043',
   },
   activityFilterChipTextActive: {
-    color: '#FFFFFF',
+    color: '#1A73E8',
   },
   activityLogButton: {
-    backgroundColor: '#126782',
-    borderRadius: 10,
+    backgroundColor: '#1A73E8',
+    borderRadius: 6,
     alignItems: 'center',
-    paddingVertical: 13,
+    paddingVertical: 12,
+    minHeight: 44,
+    justifyContent: 'center',
     marginBottom: 16,
   },
   activityLogButtonText: {
@@ -5440,11 +5531,16 @@ const styles = StyleSheet.create({
   },
   activityCard: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 12,
+    borderRadius: 8,
     borderWidth: 1,
-    borderColor: '#D9E2EC',
-    padding: 14,
-    marginBottom: 10,
+    borderColor: '#E8EAED',
+    padding: 20,
+    marginBottom: 12,
+    shadowColor: '#000000',
+    shadowOpacity: 0.08,
+    shadowRadius: 3,
+    shadowOffset: { width: 0, height: 1 },
+    elevation: 1,
   },
   activityCardHeader: {
     flexDirection: 'row',
@@ -5457,48 +5553,49 @@ const styles = StyleSheet.create({
     marginRight: 8,
   },
   activityCardName: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: '#102A43',
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#202124',
     marginBottom: 2,
   },
   activityCardMeta: {
-    fontSize: 12,
-    color: '#486581',
+    fontSize: 13,
+    color: '#80868B',
   },
   activityCardBadge: {
-    backgroundColor: '#EEF4FF',
-    borderRadius: 8,
+    backgroundColor: '#E8F0FE',
+    borderRadius: 6,
     paddingHorizontal: 8,
     paddingVertical: 4,
   },
   activityCardBadgeText: {
     fontSize: 11,
     fontWeight: '700',
-    color: '#126782',
+    color: '#1A73E8',
   },
   activityCardDetail: {
-    fontSize: 13,
-    color: '#486581',
+    fontSize: 14,
+    color: '#3C4043',
     marginBottom: 4,
+    lineHeight: 22,
   },
   activityCardBody: {
-    fontSize: 13,
-    color: '#334E68',
-    lineHeight: 18,
+    fontSize: 14,
+    color: '#3C4043',
+    lineHeight: 22,
     marginTop: 4,
     marginBottom: 4,
   },
   activityCardFooter: {
-    fontSize: 11,
-    color: '#7C8FA3',
+    fontSize: 12,
+    color: '#80868B',
     marginTop: 6,
   },
   activityDeleteButton: {
     marginTop: 10,
     paddingVertical: 6,
     paddingHorizontal: 14,
-    borderRadius: 8,
+    borderRadius: 6,
     backgroundColor: '#FFF5F5',
     borderWidth: 1,
     borderColor: '#FECACA',
@@ -5509,18 +5606,20 @@ const styles = StyleSheet.create({
     color: '#C92A2A',
   },
   activityFilePickButton: {
-    backgroundColor: '#F8FAFC',
+    backgroundColor: '#FFFFFF',
     borderWidth: 1,
-    borderColor: '#D9E2EC',
-    borderRadius: 10,
+    borderColor: '#E8EAED',
+    borderRadius: 6,
     alignItems: 'center',
-    paddingVertical: 13,
+    paddingVertical: 12,
+    minHeight: 44,
+    justifyContent: 'center',
     marginBottom: 6,
   },
   activityFilePickButtonText: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#126782',
+    color: '#1A73E8',
   },
   activityRemoveFile: {
     fontSize: 13,
@@ -5535,32 +5634,34 @@ const styles = StyleSheet.create({
     marginTop: 10,
   },
   activityEditButton: {
-    paddingVertical: 6,
-    paddingHorizontal: 14,
-    borderRadius: 8,
-    backgroundColor: '#EEF4FF',
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 6,
+    backgroundColor: '#E8F0FE',
     borderWidth: 1,
-    borderColor: '#BFDBFE',
+    borderColor: '#1A73E8',
+    minHeight: 40,
+    justifyContent: 'center',
   },
   activityEditButtonText: {
     fontSize: 12,
     fontWeight: '600',
-    color: '#1D4ED8',
+    color: '#1A73E8',
   },
   activityDetailRow: {
     marginBottom: 10,
   },
   activityDetailLabel: {
     fontSize: 12,
-    fontWeight: '700',
-    color: '#486581',
+    fontWeight: '600',
+    color: '#80868B',
     marginBottom: 2,
     textTransform: 'uppercase',
     letterSpacing: 0.5,
   },
   activityDetailValue: {
     fontSize: 14,
-    color: '#102A43',
-    lineHeight: 20,
+    color: '#3C4043',
+    lineHeight: 22,
   },
 });
