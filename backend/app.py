@@ -1,4 +1,6 @@
 import csv
+import json
+import os
 from datetime import date, datetime, timezone
 from io import BytesIO
 from pathlib import Path
@@ -6,6 +8,8 @@ from pathlib import Path
 from flask import Flask, jsonify, request, send_file
 from flask_cors import CORS
 from openpyxl import Workbook, load_workbook
+import firebase_admin
+from firebase_admin import credentials, firestore
 
 from attendance_register import get_daily_register, list_attendance_entries_for_range, update_attendance_entry
 from incident_register import create_incident_record, list_incidents
@@ -14,6 +18,31 @@ from pdf_export import build_compliance_report_pdf
 
 app = Flask(__name__)
 CORS(app)
+
+# Initialize Firebase
+def init_firebase():
+    """Initialize Firebase Admin SDK for Firestore access."""
+    if not firebase_admin._apps:
+        cred_json = os.getenv('FIREBASE_SERVICE_ACCOUNT_JSON')
+        cred_path = os.getenv('FIREBASE_SERVICE_ACCOUNT_PATH')
+        
+        if cred_json:
+            cred_dict = json.loads(cred_json)
+            cred = credentials.Certificate(cred_dict)
+        elif cred_path:
+            cred = credentials.Certificate(cred_path)
+        else:
+            raise ValueError('Must set FIREBASE_SERVICE_ACCOUNT_JSON or FIREBASE_SERVICE_ACCOUNT_PATH')
+        
+        firebase_admin.initialize_app(cred)
+
+try:
+    init_firebase()
+except ValueError as e:
+    print(f"Warning: Firebase not initialized: {e}")
+    print("PDF export and Firestore-based endpoints may not work")
+
+db = firestore.client()
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 STUDENTS_XLSX_FILE = BASE_DIR / 'Students' / 'students_template.xlsx'
@@ -198,12 +227,29 @@ def load_students_from_csv():
     return students
 
 
-def load_students():
-    students_from_xlsx = load_students_from_xlsx()
-    if students_from_xlsx:
-        return students_from_xlsx
-
-    return load_students_from_csv()
+def load_students(db_client=None, school_id: str = None):
+    """
+    Load students, optionally from Firestore or from local files.
+    
+    If db_client (Firestore client) and school_id are provided, reads from Firestore.
+    Otherwise falls back to local xlsx/csv files for backwards compatibility.
+    """
+    if db_client and school_id:
+        try:
+            # Read from Firestore school-scoped collection
+            students_ref = db_client.collection('schools').document(school_id).collection('students')
+            docs = students_ref.order_by('firstName').stream()
+            students = [{'id': doc.id, **doc.to_dict()} for doc in docs]
+            return students if students else []
+        except Exception as e:
+            print(f"Error reading students from Firestore: {e}")
+            return []
+    else:
+        # Fallback to local files
+        students_from_xlsx = load_students_from_xlsx()
+        if students_from_xlsx:
+            return students_from_xlsx
+        return load_students_from_csv()
 
 
 def save_students_to_xlsx(students):
@@ -432,6 +478,7 @@ def create_medicine_entry():
 
 @app.get('/exports/compliance-report')
 def export_compliance_report():
+    school_id = str(request.args.get('schoolId') or '').strip()
     school_name = str(request.args.get('schoolName') or 'School Safety & Compliance Centre').strip()
     try:
         start_date = normalize_register_date(request.args.get('startDate'))
@@ -442,12 +489,13 @@ def export_compliance_report():
     if start_date > end_date:
         return jsonify({'error': 'startDate must be before or equal to endDate.'}), 400
 
-    students = load_students()
-    attendance_entries = list_attendance_entries_for_range(start_date, end_date, students)
+    # Use Firestore if schoolId is provided, otherwise fallback to local files
+    students = load_students(db, school_id) if school_id else load_students()
+    attendance_entries = list_attendance_entries_for_range(start_date, end_date, students, db, school_id)
     # Filter to only include Late and Absent entries, exclude Present
     attendance_entries = [entry for entry in attendance_entries if entry.get('status') in ['Late', 'Absent']]
-    incidents = filter_records_by_created_at(list_incidents(), start_date, end_date, field_name='timestamp')
-    medicine_entries = filter_records_by_created_at(list_medicine_logs(), start_date, end_date, field_name='timeAdministered')
+    incidents = filter_records_by_created_at(list_incidents(db, school_id), start_date, end_date, field_name='timestamp')
+    medicine_entries = filter_records_by_created_at(list_medicine_logs(db, school_id), start_date, end_date, field_name='timeAdministered')
 
     pdf_bytes = build_compliance_report_pdf(
         school_name=school_name,

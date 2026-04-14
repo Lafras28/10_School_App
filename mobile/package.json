@@ -12,7 +12,11 @@
     "web:build": "npx expo export --platform web",
     "web:preview": "npx serve dist",
     "lint": "expo lint",
-    "build:android": "npx eas build -p android --profile preview"
+    "build:android": "npx eas build -p android --profile preview",
+    "migrate:schools": "node ./scripts/migrate-to-school-collections.mjs",
+    "seed:schools": "node ./scripts/seed-two-schools.mjs",
+    "template:school": "node ./scripts/generate-school-template.mjs",
+    "import:school": "node ./scripts/import-school-from-excel.mjs"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",
@@ -36,6 +40,7 @@
     "expo-system-ui": "~6.0.9",
     "expo-web-browser": "~15.0.10",
     "firebase": "^12.11.0",
+    "firebase-admin": "^13.0.2",
     "react": "19.1.0",
     "react-dom": "19.1.0",
     "react-native": "0.81.5",
@@ -50,6 +55,7 @@
     "@types/react": "~19.1.0",
     "eslint": "^9.25.0",
     "eslint-config-expo": "~10.0.0",
+    "exceljs": "^4.4.0",
     "typescript": "~5.9.2"
   },
   "private": true

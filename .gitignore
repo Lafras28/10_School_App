@@ -15,3 +15,5 @@ web-build/
 
 # Firebase / Secrets
 serviceAccountKey.json
+*service-account*.json
+*firebase-adminsdk*.json

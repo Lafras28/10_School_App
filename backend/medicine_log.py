@@ -9,12 +9,29 @@ from compliance_store import COMPLIANCE_DATA_DIR, load_json_file, save_json_file
 MEDICINE_LOGS_FILE = COMPLIANCE_DATA_DIR / 'medicine_logs.json'
 
 
-def list_medicine_logs() -> list[dict]:
-    records = load_json_file(MEDICINE_LOGS_FILE, [])
-    if not isinstance(records, list):
-        return []
-
-    return sorted(records, key=lambda item: item.get('createdAt', ''), reverse=True)
+def list_medicine_logs(db=None, school_id: str = None) -> list[dict]:
+    """
+    List all medicine logs, optionally filtered by school.
+    
+    If db (Firestore client) and school_id are provided, reads from Firestore.
+    Otherwise falls back to local JSON file for backwards compatibility.
+    """
+    if db and school_id:
+        try:
+            # Read from Firestore school-scoped collection
+            logs_ref = db.collection('schools').document(school_id).collection('medicine_logs')
+            docs = logs_ref.order_by('timeAdministered', direction='DESCENDING').stream()
+            records = [{'id': doc.id, **doc.to_dict()} for doc in docs]
+            return records if records else []
+        except Exception as e:
+            print(f"Error reading medicine logs from Firestore: {e}")
+            return []
+    else:
+        # Fallback to local JSON file
+        records = load_json_file(MEDICINE_LOGS_FILE, [])
+        if not isinstance(records, list):
+            return []
+        return sorted(records, key=lambda item: item.get('createdAt', ''), reverse=True)
 
 
 def has_allergy_warning(medication_name: str, allergies: str) -> bool:

@@ -23,6 +23,8 @@ const firebaseConfig = {
   measurementId: 'G-LVZ6MPRQ06',
 };
 
+const DEFAULT_SCHOOL_ID = 'greenhill';
+const SCHOOLS_COLLECTION = 'schools';
 const USERS_COLLECTION = 'users';
 const STUDENTS_COLLECTION = 'students';
 const ATTENDANCE_COLLECTION = 'attendance';
@@ -31,6 +33,14 @@ const MEDICINE_LOGS_COLLECTION = 'medicine_logs';
 const COMPLIANCE_DOCS_COLLECTION = 'compliance_documents';
 const ACTIVITIES_COLLECTION = 'activities';
 const PRINCIPAL_EMAILS = new Set(['fritzlafras@gmail.com', 'principal@school.com']);
+
+export const DEFAULT_SCHOOL_FEATURE_FLAGS = {
+  students: true,
+  activities: false,
+  staffAccess: true,
+  compliance: false,
+  pdfExport: true,
+};
 
 export const DEFAULT_ROLE_PERMISSIONS = {
   principal: {
@@ -75,6 +85,7 @@ export const firebaseApp = getApps().length ? getApp() : initializeApp(firebaseC
 export const auth = getAuth(firebaseApp);
 export const db = getFirestore(firebaseApp);
 export const storage = getStorage(firebaseApp);
+let activeSchoolId = DEFAULT_SCHOOL_ID;
 
 function createRecordId(prefix) {
   return `${prefix}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
@@ -83,6 +94,54 @@ function createRecordId(prefix) {
 function getDefaultPermissionsForRole(role = 'teacher') {
   const normalizedRole = String(role || 'teacher').trim().toLowerCase();
   return DEFAULT_ROLE_PERMISSIONS[normalizedRole] || DEFAULT_ROLE_PERMISSIONS.teacher;
+}
+
+function normalizeSchoolId(value) {
+  const candidate = String(value || '').trim().toLowerCase().replace(/[^a-z0-9-_]/g, '-');
+  return candidate || DEFAULT_SCHOOL_ID;
+}
+
+function buildDefaultSchoolFeatures(overrides = {}) {
+  return {
+    ...DEFAULT_SCHOOL_FEATURE_FLAGS,
+    ...(overrides && typeof overrides === 'object' ? overrides : {}),
+  };
+}
+
+function buildDefaultSchoolName(schoolId = DEFAULT_SCHOOL_ID) {
+  const cleaned = String(schoolId || DEFAULT_SCHOOL_ID).replace(/[-_]+/g, ' ').trim();
+  return cleaned ? cleaned.replace(/\b\w/g, (char) => char.toUpperCase()) : 'School';
+}
+
+function schoolCollectionRef(schoolId, collectionName) {
+  return collection(db, SCHOOLS_COLLECTION, normalizeSchoolId(schoolId), collectionName);
+}
+
+function schoolDocRef(schoolId, collectionName, docId) {
+  return doc(db, SCHOOLS_COLLECTION, normalizeSchoolId(schoolId), collectionName, String(docId || '').trim());
+}
+
+async function fetchSchoolConfigById(schoolId) {
+  const normalizedSchoolId = normalizeSchoolId(schoolId);
+  const schoolRef = doc(db, SCHOOLS_COLLECTION, normalizedSchoolId);
+  const snapshot = await getDoc(schoolRef);
+
+  if (!snapshot.exists()) {
+    return {
+      id: normalizedSchoolId,
+      name: buildDefaultSchoolName(normalizedSchoolId),
+      features: buildDefaultSchoolFeatures(),
+      principalUserUid: '',
+    };
+  }
+
+  const data = snapshot.data() || {};
+  return {
+    id: normalizedSchoolId,
+    name: String(data?.name || buildDefaultSchoolName(normalizedSchoolId)).trim(),
+    features: buildDefaultSchoolFeatures(data?.features || {}),
+    principalUserUid: String(data?.principalUserUid || '').trim(),
+  };
 }
 
 function inferRoleFromEmail(email = '') {
@@ -116,6 +175,8 @@ function buildAccessProfile(user, data = {}) {
     uid: String(user?.uid || '').trim(),
     email: String(data?.email || user?.email || '').trim(),
     displayName: String(data?.displayName || user?.displayName || user?.email || 'Staff Member').trim(),
+    schoolId: normalizeSchoolId(data?.schoolId),
+    schoolFeatures: buildDefaultSchoolFeatures(data?.schoolFeatures || {}),
     role,
     permissions,
     linkedStudentIds: Array.isArray(data?.linkedStudentIds)
@@ -126,30 +187,74 @@ function buildAccessProfile(user, data = {}) {
 
 export async function ensureUserAccessProfile(user) {
   if (!user?.uid) {
-    return buildAccessProfile(null, { displayName: 'Staff Member', role: 'teacher' });
+    const fallbackProfile = buildAccessProfile(null, {
+      displayName: 'Staff Member',
+      role: 'teacher',
+      schoolId: DEFAULT_SCHOOL_ID,
+      schoolFeatures: buildDefaultSchoolFeatures(),
+    });
+    activeSchoolId = fallbackProfile.schoolId;
+    return fallbackProfile;
   }
 
   const userRef = doc(db, USERS_COLLECTION, user.uid);
   const snapshot = await getDoc(userRef);
+  const existingData = snapshot.exists() ? (snapshot.data() || {}) : {};
+  const provisionalProfile = buildAccessProfile(user, existingData);
+  const schoolId = normalizeSchoolId(existingData?.schoolId || provisionalProfile.schoolId);
+  const schoolRef = doc(db, SCHOOLS_COLLECTION, schoolId);
+  const schoolSnapshot = await getDoc(schoolRef);
+
+  if (!schoolSnapshot.exists()) {
+    await setDoc(schoolRef, {
+      id: schoolId,
+      name: buildDefaultSchoolName(schoolId),
+      principalUserUid: provisionalProfile.role === 'principal' ? provisionalProfile.uid : '',
+      features: buildDefaultSchoolFeatures(),
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }, { merge: true });
+  }
+
+  const schoolConfig = await fetchSchoolConfigById(schoolId);
+  if (provisionalProfile.role === 'principal' && !schoolConfig.principalUserUid) {
+    await setDoc(schoolRef, {
+      principalUserUid: provisionalProfile.uid,
+      updatedAt: new Date().toISOString(),
+    }, { merge: true });
+  }
+
+  const schoolFeatures = schoolConfig.features;
 
   if (snapshot.exists()) {
-    const profile = buildAccessProfile(user, snapshot.data() || {});
+    const profile = buildAccessProfile(user, {
+      ...snapshot.data(),
+      schoolId,
+      schoolFeatures,
+    });
     await setDoc(userRef, {
       email: profile.email,
       displayName: profile.displayName,
+      schoolId: profile.schoolId,
       role: profile.role,
       permissions: profile.permissions,
       updatedAt: new Date().toISOString(),
     }, { merge: true });
+    activeSchoolId = profile.schoolId;
     return profile;
   }
 
   const newProfile = {
-    ...buildAccessProfile(user, { role: inferRoleFromEmail(user.email || '') }),
+    ...buildAccessProfile(user, {
+      role: inferRoleFromEmail(user.email || ''),
+      schoolId,
+      schoolFeatures,
+    }),
     createdAt: new Date().toISOString(),
   };
 
   await setDoc(userRef, newProfile, { merge: true });
+  activeSchoolId = newProfile.schoolId;
   return newProfile;
 }
 
@@ -172,22 +277,32 @@ export function listenToAuthChanges(callback) {
     unsubscribeProfile = () => {};
 
     if (!user) {
+      activeSchoolId = DEFAULT_SCHOOL_ID;
       callback(null, null);
       return;
     }
 
     try {
       const accessProfile = await ensureUserAccessProfile(user);
+      activeSchoolId = accessProfile.schoolId;
       callback(user, accessProfile);
 
       const userRef = doc(db, USERS_COLLECTION, user.uid);
-      unsubscribeProfile = onSnapshot(userRef, (snapshot) => {
+      unsubscribeProfile = onSnapshot(userRef, async (snapshot) => {
         if (!snapshot.exists()) {
           callback(user, buildAccessProfile(user));
           return;
         }
 
-        callback(user, buildAccessProfile(user, snapshot.data() || {}));
+        const baseProfile = buildAccessProfile(user, snapshot.data() || {});
+        const schoolConfig = await fetchSchoolConfigById(baseProfile.schoolId);
+        const nextProfile = buildAccessProfile(user, {
+          ...(snapshot.data() || {}),
+          schoolId: baseProfile.schoolId,
+          schoolFeatures: schoolConfig.features,
+        });
+        activeSchoolId = nextProfile.schoolId;
+        callback(user, nextProfile);
       }, (error) => {
         console.warn('Could not subscribe to user access profile.', error);
       });
@@ -260,7 +375,9 @@ export async function updateCurrentUserCredentials({ currentPassword = '', newEm
 }
 
 export async function fetchUserAccessProfiles() {
-  const snapshot = await getDocs(collection(db, USERS_COLLECTION));
+  const currentSchoolId = normalizeSchoolId(activeSchoolId);
+  const usersQuery = query(collection(db, USERS_COLLECTION), where('schoolId', '==', currentSchoolId));
+  const snapshot = await getDocs(usersQuery);
   return snapshot.docs
     .map((documentSnapshot) => {
       const data = documentSnapshot.data() || {};
@@ -295,6 +412,7 @@ export async function updateUserAccessProfile(uid, updates = {}) {
   const nextData = {
     ...existingData,
     ...updates,
+    schoolId: normalizeSchoolId(existingData?.schoolId || activeSchoolId),
     role,
     permissions: nextPermissions,
     updatedAt: new Date().toISOString(),
@@ -328,6 +446,7 @@ function normalizeStudent(student = {}, fallbackId = '') {
     : [];
 
   return {
+    schoolId: normalizeSchoolId(student?.schoolId || activeSchoolId),
     id: studentId,
     firstName: String(student?.firstName || '').trim(),
     lastName: String(student?.lastName || '').trim(),
@@ -349,6 +468,7 @@ function normalizeAttendanceEntry(entry = {}, fallbackId = '') {
   const parentReportedAbsent = Boolean(entry?.parentReportedAbsent) && status === 'Absent';
 
   return {
+    schoolId: normalizeSchoolId(entry?.schoolId || activeSchoolId),
     id: String(entry?.id || fallbackId || `${date}_${studentId}`).trim(),
     date,
     studentId,
@@ -369,6 +489,7 @@ function normalizeIncidentRecord(record = {}, fallbackId = '') {
   const createdAt = String(record?.createdAt || record?.timestamp || new Date().toISOString()).trim();
 
   return {
+    schoolId: normalizeSchoolId(record?.schoolId || activeSchoolId),
     id: String(record?.id || fallbackId || createRecordId('inc')).trim(),
     studentId: String(record?.studentId || '').trim(),
     studentName: String(record?.studentName || '').trim(),
@@ -386,6 +507,7 @@ function normalizeMedicineLog(record = {}, fallbackId = '') {
   const createdAt = String(record?.createdAt || record?.timeAdministered || new Date().toISOString()).trim();
 
   return {
+    schoolId: normalizeSchoolId(record?.schoolId || activeSchoolId),
     id: String(record?.id || fallbackId || createRecordId('med')).trim(),
     studentId: String(record?.studentId || '').trim(),
     studentName: String(record?.studentName || '').trim(),
@@ -412,6 +534,7 @@ function compareStudentIds(left, right) {
 
 function normalizeActivity(data = {}, fallbackId = '') {
   return {
+    schoolId: normalizeSchoolId(data?.schoolId || activeSchoolId),
     id: String(data?.id || fallbackId || createRecordId('act')).trim(),
     datum: String(data?.datum || '').trim(),
     aktiwiteitsName: String(data?.aktiwiteitsName || '').trim(),
@@ -464,14 +587,14 @@ function hasAllergyWarning(medicationName, allergies) {
 }
 
 export async function fetchStudentsFromFirestore() {
-  const snapshot = await getDocs(collection(db, STUDENTS_COLLECTION));
+  const snapshot = await getDocs(schoolCollectionRef(activeSchoolId, STUDENTS_COLLECTION));
   return snapshot.docs
     .map((documentSnapshot) => normalizeStudent(documentSnapshot.data() || {}, documentSnapshot.id))
     .sort(compareStudentIds);
 }
 
 export async function fetchAttendanceFromFirestore(registerDate) {
-  const attendanceQuery = query(collection(db, ATTENDANCE_COLLECTION), where('date', '==', String(registerDate || '').trim()));
+  const attendanceQuery = query(schoolCollectionRef(activeSchoolId, ATTENDANCE_COLLECTION), where('date', '==', String(registerDate || '').trim()));
   const snapshot = await getDocs(attendanceQuery);
   return snapshot.docs
     .map((documentSnapshot) => normalizeAttendanceEntry(documentSnapshot.data() || {}, documentSnapshot.id))
@@ -479,21 +602,21 @@ export async function fetchAttendanceFromFirestore(registerDate) {
 }
 
 export async function fetchAllAttendanceFromFirestore() {
-  const snapshot = await getDocs(collection(db, ATTENDANCE_COLLECTION));
+  const snapshot = await getDocs(schoolCollectionRef(activeSchoolId, ATTENDANCE_COLLECTION));
   return snapshot.docs
     .map((documentSnapshot) => normalizeAttendanceEntry(documentSnapshot.data() || {}, documentSnapshot.id))
     .sort(compareNewestFirst);
 }
 
 export async function fetchIncidentsFromFirestore() {
-  const snapshot = await getDocs(collection(db, INCIDENTS_COLLECTION));
+  const snapshot = await getDocs(schoolCollectionRef(activeSchoolId, INCIDENTS_COLLECTION));
   return snapshot.docs
     .map((documentSnapshot) => normalizeIncidentRecord(documentSnapshot.data() || {}, documentSnapshot.id))
     .sort(compareNewestFirst);
 }
 
 export async function fetchMedicineLogsFromFirestore() {
-  const snapshot = await getDocs(collection(db, MEDICINE_LOGS_COLLECTION));
+  const snapshot = await getDocs(schoolCollectionRef(activeSchoolId, MEDICINE_LOGS_COLLECTION));
   return snapshot.docs
     .map((documentSnapshot) => normalizeMedicineLog(documentSnapshot.data() || {}, documentSnapshot.id))
     .sort(compareNewestFirst);
@@ -517,7 +640,7 @@ export async function saveStudentToFirestore(student, existingId = '') {
   const studentId = String(existingId || student?.id || '').trim() || await getNextStudentId();
   const normalized = normalizeStudent(student, studentId);
 
-  await setDoc(doc(db, STUDENTS_COLLECTION, studentId), normalized, { merge: true });
+  await setDoc(schoolDocRef(activeSchoolId, STUDENTS_COLLECTION, studentId), normalized, { merge: true });
   return normalized;
 }
 
@@ -538,9 +661,9 @@ export async function saveAttendanceToFirestore(registerDate, entry, status, rea
   });
 
   if (['Absent', 'Late'].includes(normalized.status)) {
-    await setDoc(doc(db, ATTENDANCE_COLLECTION, normalized.id), normalized, { merge: true });
+    await setDoc(schoolDocRef(activeSchoolId, ATTENDANCE_COLLECTION, normalized.id), normalized, { merge: true });
   } else if (normalized.id) {
-    await deleteDoc(doc(db, ATTENDANCE_COLLECTION, normalized.id));
+    await deleteDoc(schoolDocRef(activeSchoolId, ATTENDANCE_COLLECTION, normalized.id));
   }
 
   return normalized;
@@ -560,7 +683,7 @@ export async function saveIncidentToFirestore(payload = {}, student = null) {
     readOnly: true,
   });
 
-  await setDoc(doc(db, INCIDENTS_COLLECTION, normalized.id), normalized, { merge: true });
+  await setDoc(schoolDocRef(activeSchoolId, INCIDENTS_COLLECTION, normalized.id), normalized, { merge: true });
   return normalized;
 }
 
@@ -580,7 +703,7 @@ export async function saveMedicineLogToFirestore(payload = {}, student = null) {
     createdAt,
   });
 
-  await setDoc(doc(db, MEDICINE_LOGS_COLLECTION, normalized.id), normalized, { merge: true });
+  await setDoc(schoolDocRef(activeSchoolId, MEDICINE_LOGS_COLLECTION, normalized.id), normalized, { merge: true });
   return normalized;
 }
 
@@ -598,7 +721,7 @@ export async function seedStudentsToFirestore(students = []) {
       return;
     }
 
-    batch.set(doc(db, STUDENTS_COLLECTION, studentId), normalizeStudent(student, studentId), { merge: true });
+    batch.set(schoolDocRef(activeSchoolId, STUDENTS_COLLECTION, studentId), normalizeStudent(student, studentId), { merge: true });
     count += 1;
   });
 
@@ -623,7 +746,7 @@ export async function seedAttendanceToFirestore(entries = []) {
       return;
     }
 
-    batch.set(doc(db, ATTENDANCE_COLLECTION, normalized.id), normalized, { merge: true });
+    batch.set(schoolDocRef(activeSchoolId, ATTENDANCE_COLLECTION, normalized.id), normalized, { merge: true });
     count += 1;
   });
 
@@ -648,7 +771,7 @@ export async function seedIncidentsToFirestore(records = []) {
       return;
     }
 
-    batch.set(doc(db, INCIDENTS_COLLECTION, normalized.id), normalized, { merge: true });
+    batch.set(schoolDocRef(activeSchoolId, INCIDENTS_COLLECTION, normalized.id), normalized, { merge: true });
     count += 1;
   });
 
@@ -673,7 +796,7 @@ export async function seedMedicineLogsToFirestore(records = []) {
       return;
     }
 
-    batch.set(doc(db, MEDICINE_LOGS_COLLECTION, normalized.id), normalized, { merge: true });
+    batch.set(schoolDocRef(activeSchoolId, MEDICINE_LOGS_COLLECTION, normalized.id), normalized, { merge: true });
     count += 1;
   });
 
@@ -687,7 +810,7 @@ export async function seedMedicineLogsToFirestore(records = []) {
 export async function saveComplianceDocument(category, fileUri, fileName, notes, uploaderProfile) {
   const docId = createRecordId('cdoc');
   const safeFileName = String(fileName || 'document').replace(/[^a-zA-Z0-9._-]/g, '_');
-  const storagePath = `compliance/${category}/${docId}-${safeFileName}`;
+  const storagePath = `schools/${normalizeSchoolId(activeSchoolId)}/compliance/${category}/${docId}-${safeFileName}`;
   const storageRef = ref(storage, storagePath);
 
   const response = await fetch(fileUri);
@@ -696,6 +819,7 @@ export async function saveComplianceDocument(category, fileUri, fileName, notes,
   const fileUrl = await getDownloadURL(storageRef);
 
   const data = {
+    schoolId: normalizeSchoolId(activeSchoolId),
     id: docId,
     category: String(category || '').trim(),
     fileName: String(fileName || 'document').trim(),
@@ -707,12 +831,12 @@ export async function saveComplianceDocument(category, fileUri, fileName, notes,
     uploadedByEmail: String(uploaderProfile?.email || '').trim(),
   };
 
-  await setDoc(doc(db, COMPLIANCE_DOCS_COLLECTION, docId), data);
+  await setDoc(schoolDocRef(activeSchoolId, COMPLIANCE_DOCS_COLLECTION, docId), data);
   return data;
 }
 
 export async function fetchComplianceDocuments(category) {
-  const q = query(collection(db, COMPLIANCE_DOCS_COLLECTION), where('category', '==', String(category || '').trim()));
+  const q = query(schoolCollectionRef(activeSchoolId, COMPLIANCE_DOCS_COLLECTION), where('category', '==', String(category || '').trim()));
   const snapshot = await getDocs(q);
   return snapshot.docs
     .map((d) => d.data())
@@ -723,7 +847,7 @@ export async function deleteComplianceDocument(docId, storagePath) {
   const normalizedDocId = String(docId || '').trim();
   if (!normalizedDocId) return;
 
-  await deleteDoc(doc(db, COMPLIANCE_DOCS_COLLECTION, normalizedDocId));
+  await deleteDoc(schoolDocRef(activeSchoolId, COMPLIANCE_DOCS_COLLECTION, normalizedDocId));
 
   if (storagePath) {
     try {
@@ -742,7 +866,7 @@ export async function saveActivityToFirestore(activityData, uploaderProfile, fil
 
   if (fileAsset) {
     const safeFileName = String(fileAsset.name || 'bestand').replace(/[^a-zA-Z0-9._-]/g, '_');
-    storagePath = `activities/${actId}-${safeFileName}`;
+    storagePath = `schools/${normalizeSchoolId(activeSchoolId)}/activities/${actId}-${safeFileName}`;
     const storageRef = ref(storage, storagePath);
     const response = await fetch(fileAsset.uri);
     const blob = await response.blob();
@@ -763,12 +887,12 @@ export async function saveActivityToFirestore(activityData, uploaderProfile, fil
     createdAt: new Date().toISOString(),
   }, actId);
 
-  await setDoc(doc(db, ACTIVITIES_COLLECTION, actId), normalized);
+  await setDoc(schoolDocRef(activeSchoolId, ACTIVITIES_COLLECTION, actId), normalized);
   return normalized;
 }
 
 export async function fetchActivitiesFromFirestore() {
-  const snapshot = await getDocs(collection(db, ACTIVITIES_COLLECTION));
+  const snapshot = await getDocs(schoolCollectionRef(activeSchoolId, ACTIVITIES_COLLECTION));
   const all = snapshot.docs.map((d) => normalizeActivity(d.data(), d.id));
   return all.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
 }
@@ -777,7 +901,7 @@ export async function updateActivityInFirestore(activityId, updateData) {
   const normalizedId = String(activityId || '').trim();
   if (!normalizedId) throw new Error('Activity id is required to update.');
 
-  const actRef = doc(db, ACTIVITIES_COLLECTION, normalizedId);
+  const actRef = schoolDocRef(activeSchoolId, ACTIVITIES_COLLECTION, normalizedId);
   const snapshot = await getDoc(actRef);
   const existing = snapshot.exists() ? snapshot.data() : {};
 
@@ -790,7 +914,7 @@ export async function deleteActivityFromFirestore(activityId, storagePath) {
   const normalizedId = String(activityId || '').trim();
   if (!normalizedId) return;
 
-  await deleteDoc(doc(db, ACTIVITIES_COLLECTION, normalizedId));
+  await deleteDoc(schoolDocRef(activeSchoolId, ACTIVITIES_COLLECTION, normalizedId));
 
   if (storagePath) {
     try {
@@ -799,4 +923,27 @@ export async function deleteActivityFromFirestore(activityId, storagePath) {
       // Storage object may already be gone; Firestore deletion is authoritative
     }
   }
+}
+
+export async function getCurrentSchoolConfig() {
+  return fetchSchoolConfigById(activeSchoolId);
+}
+
+export async function updateCurrentSchoolFeatures(featureUpdates = {}, principalUid = '') {
+  const schoolId = normalizeSchoolId(activeSchoolId);
+  const currentConfig = await fetchSchoolConfigById(schoolId);
+  const nextFeatures = buildDefaultSchoolFeatures({
+    ...currentConfig.features,
+    ...(featureUpdates && typeof featureUpdates === 'object' ? featureUpdates : {}),
+  });
+
+  await setDoc(doc(db, SCHOOLS_COLLECTION, schoolId), {
+    id: schoolId,
+    name: currentConfig.name || buildDefaultSchoolName(schoolId),
+    principalUserUid: String(principalUid || currentConfig.principalUserUid || '').trim(),
+    features: nextFeatures,
+    updatedAt: new Date().toISOString(),
+  }, { merge: true });
+
+  return fetchSchoolConfigById(schoolId);
 }

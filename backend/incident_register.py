@@ -8,12 +8,29 @@ from compliance_store import COMPLIANCE_DATA_DIR, load_json_file, save_json_file
 INCIDENTS_FILE = COMPLIANCE_DATA_DIR / 'incidents.json'
 
 
-def list_incidents() -> list[dict]:
-    records = load_json_file(INCIDENTS_FILE, [])
-    if not isinstance(records, list):
-        return []
-
-    return sorted(records, key=lambda item: item.get('createdAt', ''), reverse=True)
+def list_incidents(db=None, school_id: str = None) -> list[dict]:
+    """
+    List all incidents, optionally filtered by school.
+    
+    If db (Firestore client) and school_id are provided, reads from Firestore.
+    Otherwise falls back to local JSON file for backwards compatibility.
+    """
+    if db and school_id:
+        try:
+            # Read from Firestore school-scoped collection
+            incidents_ref = db.collection('schools').document(school_id).collection('incidents')
+            docs = incidents_ref.order_by('timestamp', direction='DESCENDING').stream()
+            records = [{'id': doc.id, **doc.to_dict()} for doc in docs]
+            return records if records else []
+        except Exception as e:
+            print(f"Error reading incidents from Firestore: {e}")
+            return []
+    else:
+        # Fallback to local JSON file
+        records = load_json_file(INCIDENTS_FILE, [])
+        if not isinstance(records, list):
+            return []
+        return sorted(records, key=lambda item: item.get('createdAt', ''), reverse=True)
 
 
 def create_incident_record(payload: dict, student: Optional[dict] = None) -> dict:

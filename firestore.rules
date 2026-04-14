@@ -1,0 +1,103 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function userDoc(uid) {
+      return get(/databases/$(database)/documents/users/$(uid));
+    }
+
+    function myUserDocExists() {
+      return signedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function mySchoolId() {
+      return myUserDocExists() ? userDoc(request.auth.uid).data.schoolId : null;
+    }
+
+    function sameSchool(schoolId) {
+      return signedIn() && mySchoolId() != null && mySchoolId() == schoolId;
+    }
+
+    function isPrincipal() {
+      return myUserDocExists() && userDoc(request.auth.uid).data.role == 'principal';
+    }
+
+    function hasPerm(permissionKey) {
+      return myUserDocExists() && userDoc(request.auth.uid).data.permissions[permissionKey] == true;
+    }
+
+    match /users/{uid} {
+      allow read: if signedIn() && (
+        uid == request.auth.uid
+        || (
+          isPrincipal()
+          && resource != null
+          && resource.data.schoolId == mySchoolId()
+        )
+      );
+
+      allow create: if signedIn() && uid == request.auth.uid;
+
+      allow update: if signedIn() && (
+        uid == request.auth.uid
+        || (
+          isPrincipal()
+          && resource != null
+          && resource.data.schoolId == mySchoolId()
+          && request.resource.data.schoolId == mySchoolId()
+        )
+      );
+
+      allow delete: if false;
+    }
+
+    match /schools/{schoolId} {
+      allow read: if sameSchool(schoolId);
+      allow create: if signedIn() && isPrincipal();
+      allow update: if sameSchool(schoolId) && isPrincipal();
+      allow delete: if false;
+
+      match /students/{docId} {
+        allow read: if sameSchool(schoolId);
+        allow write: if sameSchool(schoolId) && hasPerm('canEditStudents');
+      }
+
+      match /attendance/{docId} {
+        allow read: if sameSchool(schoolId);
+        allow write: if sameSchool(schoolId) && hasPerm('canTakeAttendance');
+      }
+
+      match /incidents/{docId} {
+        allow read: if sameSchool(schoolId);
+        allow write: if sameSchool(schoolId) && hasPerm('canLogIncidents');
+      }
+
+      match /medicine_logs/{docId} {
+        allow read: if sameSchool(schoolId);
+        allow write: if sameSchool(schoolId) && hasPerm('canLogMedicine');
+      }
+
+      match /activities/{docId} {
+        allow read: if sameSchool(schoolId);
+        allow write: if sameSchool(schoolId) && (
+          hasPerm('canTakeAttendance')
+          || hasPerm('canLogIncidents')
+          || hasPerm('canLogMedicine')
+          || hasPerm('canExportReports')
+        );
+      }
+
+      match /compliance_documents/{docId} {
+        allow read: if sameSchool(schoolId);
+        allow write: if sameSchool(schoolId) && hasPerm('canExportReports');
+      }
+
+      match /{document=**} {
+        allow read, write: if false;
+      }
+    }
+  }
+}

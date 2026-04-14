@@ -109,18 +109,37 @@ def update_attendance_entry(register_date: str, student: dict, status: str, reas
     return entry
 
 
-def list_attendance_entries_for_range(start_date: str, end_date: str, students: Iterable[dict]) -> list[dict]:
-    store = _load_store()
-
-    if start_date == end_date and start_date not in store:
-        get_daily_register(start_date, students)
+def list_attendance_entries_for_range(start_date: str, end_date: str, students: Iterable[dict], db=None, school_id: str = None) -> list[dict]:
+    """
+    List attendance entries for a date range, optionally filtered by school.
+    
+    If db (Firestore client) and school_id are provided, reads from Firestore.
+    Otherwise falls back to local JSON file for backwards compatibility.
+    """
+    if db and school_id:
+        try:
+            # Read from Firestore school-scoped collection
+            attendance_ref = db.collection('schools').document(school_id).collection('attendance')
+            query = attendance_ref.where('date', '>=', start_date).where('date', '<=', end_date)
+            docs = query.order_by('date').order_by('studentName').stream()
+            entries = [{'id': doc.id, **doc.to_dict()} for doc in docs]
+            return entries if entries else []
+        except Exception as e:
+            print(f"Error reading attendance from Firestore: {e}")
+            return []
+    else:
+        # Fallback to local JSON file
         store = _load_store()
 
-    entries: list[dict] = []
-    for register_date, day_records in store.items():
-        if not isinstance(day_records, dict):
-            continue
-        if start_date <= register_date <= end_date:
-            entries.extend(day_records.values())
+        if start_date == end_date and start_date not in store:
+            get_daily_register(start_date, students)
+            store = _load_store()
 
-    return sorted(entries, key=lambda item: (item.get('date', ''), item.get('studentName', '')))
+        entries: list[dict] = []
+        for register_date, day_records in store.items():
+            if not isinstance(day_records, dict):
+                continue
+            if start_date <= register_date <= end_date:
+                entries.extend(day_records.values())
+
+        return sorted(entries, key=lambda item: (item.get('date', ''), item.get('studentName', '')))

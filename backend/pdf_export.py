@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from io import BytesIO
 
 from reportlab.lib import colors
@@ -12,6 +13,25 @@ PRIMARY = colors.HexColor('#102A43')
 BORDER = colors.HexColor('#D9E2EC')
 LIGHT = colors.HexColor('#F8FAFC')
 WARNING = colors.HexColor('#FFF3E8')
+
+
+def _format_date(value: str) -> str:
+    """
+    Format ISO date/datetime string to readable format 'DD MMM YYYY'.
+    Falls back to original value if parsing fails.
+    """
+    if not value or not isinstance(value, str):
+        return str(value or '-')
+    
+    try:
+        # Try parsing ISO format (with or without time)
+        if 'T' in value:
+            dt = datetime.fromisoformat(value.replace('Z', '+00:00'))
+        else:
+            dt = datetime.strptime(value, '%Y-%m-%d')
+        return dt.strftime('%d %b %Y')
+    except (ValueError, AttributeError):
+        return value
 
 
 def _build_table(rows: list[list[str]], column_widths: list[float]) -> Table:
@@ -103,7 +123,7 @@ def build_compliance_report_pdf(
         attendance_rows = [['Date', 'Learner', 'Status', 'Reason / Note']]
         for entry in attendance_entries:
             attendance_rows.append([
-                str(entry.get('date', '-')),
+                _format_date(entry.get('date', '-')),
                 str(entry.get('studentName') or entry.get('studentId') or 'Learner'),
                 str(entry.get('status', 'Present')),
                 str(entry.get('reason') or 'None'),
@@ -117,7 +137,7 @@ def build_compliance_report_pdf(
         incident_rows = [['Timestamp', 'Learner', 'Location', 'Action Taken', 'Witness']]
         for incident in incidents:
             incident_rows.append([
-                str(incident.get('timestamp', '-')),
+                _format_date(incident.get('timestamp', '-')),
                 str(incident.get('studentName') or incident.get('studentId') or 'General incident'),
                 str(incident.get('location', '-')),
                 str(incident.get('actionTaken', '-')),
@@ -140,7 +160,7 @@ def build_compliance_report_pdf(
         medicine_rows = [['Timestamp', 'Learner', 'Medication', 'Dosage', 'Staff Member', 'Warning']]
         for entry in medicine_logs:
             medicine_rows.append([
-                str(entry.get('timeAdministered', '-')),
+                _format_date(entry.get('timeAdministered', '-')),
                 str(entry.get('studentName') or entry.get('studentId') or 'Learner'),
                 str(entry.get('medicationName', '-')),
                 str(entry.get('dosage', '-')),
