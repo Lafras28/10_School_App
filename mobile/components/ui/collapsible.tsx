@@ -3,11 +3,12 @@ import { StyleSheet, TouchableOpacity } from 'react-native';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
+import { Card } from '@/components/ui/card';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 
-export function Collapsible({ children, title }: PropsWithChildren & { title: string }) {
+export function Collapsible({ children, title, useCard }: PropsWithChildren & { title: string; useCard?: boolean }) {
   const [isOpen, setIsOpen] = useState(false);
   const theme = useColorScheme() ?? 'light';
 
@@ -27,7 +28,13 @@ export function Collapsible({ children, title }: PropsWithChildren & { title: st
 
         <ThemedText type="defaultSemiBold">{title}</ThemedText>
       </TouchableOpacity>
-      {isOpen && <ThemedView style={styles.content}>{children}</ThemedView>}
+      {isOpen && (
+        useCard ? (
+          <Card style={styles.content}>{children}</Card>
+        ) : (
+          <ThemedView style={styles.content}>{children}</ThemedView>
+        )
+      )}
     </ThemedView>
   );
 }

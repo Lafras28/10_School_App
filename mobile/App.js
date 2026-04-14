@@ -7,7 +7,6 @@ import {
   Platform,
   SafeAreaView,
   ScrollView,
-  StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
@@ -46,8 +45,11 @@ import {
   seedStudentsToFirestore,
   signInUser,
   signOutCurrentUser,
+  sendResetPasswordEmail,
+  updateCurrentUserCredentials,
   updateUserAccessProfile,
 } from './firebaseConfig';
+import styles from './styles/appStyles';
 
 function resolveApiBaseUrl() {
   const configuredUrl = String(
@@ -79,7 +81,7 @@ const API_BASE_URL = resolveApiBaseUrl();
 const Stack = createNativeStackNavigator();
 const FORM_PLACEHOLDER_COLOR = '#334E68';
 const TODAY = new Date().toISOString().split('T')[0];
-const DEFAULT_SCHOOL_NAME = 'Bana Pele Preschool';
+const DEFAULT_SCHOOL_NAME = 'Greenhill';
 const PARENT_ABSENT_REASON = 'Parent marked absent in app';
 const CLASSROOM_OPTIONS = ['All Classes', 'Sunshine Bunnies', 'Rainbow Cubs', 'Little Explorers'];
 const ROLE_OPTIONS = ['principal', 'teacher', 'viewer', 'parent'];
@@ -130,65 +132,55 @@ function formatCompactDateDisplay(year, month, day) {
 }
 
 function CompactDatePickerModal({ visible, onClose, onDateSelect, currentYear: cy, currentMonth: cm, currentDay: cd }) {
-  const [tempYear, setTempYear] = useState(cy);
   const [tempMonth, setTempMonth] = useState(cm);
   const [tempDay, setTempDay] = useState(cd);
-  const yearOptions = Array.from({ length: 11 }, (_, i) => String(cy - 5 + i));
   const monthOptions = Array.from({ length: 12 }, (_, i) => String(i + 1).padStart(2, '0'));
   const dayOptions = Array.from({ length: 31 }, (_, i) => String(i + 1).padStart(2, '0'));
 
   useEffect(() => {
-    setTempYear(cy);
     setTempMonth(cm);
     setTempDay(cd);
   }, [cy, cm, cd, visible]);
 
   const handleConfirm = () => {
-    onDateSelect(tempYear, tempMonth, tempDay);
+    onDateSelect(String(cy), tempMonth, tempDay);
     onClose();
   };
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <TouchableWithoutFeedback onPress={onClose}>
-        <View style={styles.datePickerBackdrop}>
-          <TouchableWithoutFeedback onPress={() => {}}>
-            <View style={styles.datePickerModalCard}>
-              <Text style={styles.datePickerModalTitle}>Select Date</Text>
+      <View style={styles.datePickerModalRoot}>
+        <TouchableOpacity style={styles.datePickerBackdrop} activeOpacity={1} onPress={onClose} />
+        <View style={styles.datePickerModalCenter} pointerEvents="box-none">
+          <View style={styles.datePickerModalCard}>
+            <Text style={styles.datePickerModalTitle}>Select Date</Text>
 
-              <View style={styles.compactDatePickerRow}>
-                <CompactDatePickerColumn
-                  items={monthOptions}
-                  selectedValue={tempMonth}
-                  onSelect={setTempMonth}
-                  label="Month"
-                />
-                <CompactDatePickerColumn
-                  items={dayOptions}
-                  selectedValue={tempDay}
-                  onSelect={setTempDay}
-                  label="Day"
-                />
-                <CompactDatePickerColumn
-                  items={yearOptions}
-                  selectedValue={tempYear}
-                  onSelect={setTempYear}
-                  label="Year"
-                />
-              </View>
-
-              <View style={styles.datePickerModalButtonRow}>
-                <TouchableOpacity style={styles.datePickerModalCancelBtn} onPress={onClose}>
-                  <Text style={styles.datePickerModalCancelText}>Cancel</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.datePickerModalConfirmBtn} onPress={handleConfirm}>
-                  <Text style={styles.datePickerModalConfirmText}>OK</Text>
-                </TouchableOpacity>
-              </View>
+            <View style={styles.compactDatePickerRow}>
+              <CompactDatePickerColumn
+                items={monthOptions}
+                selectedValue={tempMonth}
+                onSelect={setTempMonth}
+                label="Month"
+              />
+              <CompactDatePickerColumn
+                items={dayOptions}
+                selectedValue={tempDay}
+                onSelect={setTempDay}
+                label="Day"
+              />
             </View>
-          </TouchableWithoutFeedback>
+
+            <View style={styles.datePickerModalButtonRow}>
+              <TouchableOpacity style={styles.datePickerModalCancelBtn} onPress={onClose}>
+                <Text style={styles.datePickerModalCancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.datePickerModalConfirmBtn} onPress={handleConfirm}>
+                <Text style={styles.datePickerModalConfirmText}>OK</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
         </View>
-      </TouchableWithoutFeedback>
+      </View>
     </Modal>
   );
 }
@@ -272,6 +264,29 @@ function formatDateTime(value) {
   }
 
   return parsedDate.toLocaleString();
+}
+
+function formatPhoneForDisplay(value) {
+  const rawValue = String(value || '').trim();
+  if (!rawValue) {
+    return 'No number saved';
+  }
+
+  const digitsOnly = rawValue.replace(/\D+/g, '');
+  if (!digitsOnly) {
+    return rawValue;
+  }
+
+  let normalized = digitsOnly;
+  if (normalized.startsWith('27') && normalized.length === 11) {
+    normalized = `0${normalized.slice(2)}`;
+  }
+
+  if (normalized.length === 10 && normalized.startsWith('0')) {
+    return `${normalized.slice(0, 3)} ${normalized.slice(3, 6)} ${normalized.slice(6)}`;
+  }
+
+  return rawValue;
 }
 
 function doesMedicationTriggerAllergy(medicationName, allergies) {
@@ -562,6 +577,9 @@ function LoginScreen({ onLogin, isBusy }) {
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
+  const [forgotBusy, setForgotBusy] = useState(false);
+  const [forgotMessage, setForgotMessage] = useState('');
+  const [forgotError, setForgotError] = useState('');
 
   const handleLogin = async () => {
     if (!identifier.trim() || !password.trim()) {
@@ -577,10 +595,42 @@ function LoginScreen({ onLogin, isBusy }) {
     }
   };
 
+  const handleForgotPassword = async () => {
+    const email = String(identifier || '').trim().toLowerCase();
+    if (!email) {
+      setForgotError('Enter your email address first.');
+      setForgotMessage('');
+      Alert.alert('Email Required', 'Enter your email address first, then tap Forgot password.');
+      return;
+    }
+
+    try {
+      setForgotBusy(true);
+      setForgotError('');
+      setForgotMessage('Sending reset link...');
+      await sendResetPasswordEmail(email);
+      setForgotMessage('If this email is registered, a reset link has been sent. Check inbox and spam folder.');
+      Alert.alert('Reset Email Sent', 'Check your inbox for the password reset link.');
+    } catch (error) {
+      const code = String(error?.code || '').trim();
+      if (code === 'auth/invalid-email') {
+        setForgotError('Please enter a valid email address.');
+        setForgotMessage('');
+        Alert.alert('Invalid Email', 'Please enter a valid email address.');
+        return;
+      }
+      setForgotError(error.message || 'Could not send password reset email.');
+      setForgotMessage('');
+      Alert.alert('Could Not Send', error.message || 'Could not send password reset email.');
+    } finally {
+      setForgotBusy(false);
+    }
+  };
+
   return (
     <SafeAreaView style={styles.loginScreenContainer}>
       <View style={styles.loginCard}>
-        <Text style={styles.loginTitle}>School Safety Login</Text>
+        <Text style={styles.loginTitle}>Greenhill Login</Text>
         <Text style={styles.loginSubtitle}>Sign in with your staff email and password. Your role controls what you can edit.</Text>
 
         <TextInput
@@ -606,10 +656,17 @@ function LoginScreen({ onLogin, isBusy }) {
         <TouchableOpacity
           style={[styles.loginButton, isBusy && styles.saveStudentButtonDisabled]}
           onPress={handleLogin}
-          disabled={isBusy}
+          disabled={isBusy || forgotBusy}
         >
           <Text style={styles.saveStudentButtonText}>{isBusy ? 'Signing In...' : 'Log In'}</Text>
         </TouchableOpacity>
+
+        <TouchableOpacity style={styles.loginForgotButton} onPress={handleForgotPassword} disabled={isBusy || forgotBusy}>
+          <Text style={styles.loginForgotText}>{forgotBusy ? 'Sending reset link...' : 'Forgot password?'}</Text>
+        </TouchableOpacity>
+
+        {forgotMessage ? <Text style={styles.loginInfoText}>{forgotMessage}</Text> : null}
+        {forgotError ? <Text style={styles.loginErrorText}>{forgotError}</Text> : null}
 
         {errorMessage ? <Text style={styles.errorText}>{errorMessage}</Text> : null}
         <Text style={styles.loginHint}>Use Firebase Auth accounts. Principal/admin emails can be given edit access, while teachers can stay view-only.</Text>
@@ -696,7 +753,7 @@ function StudentAutocomplete({
       {showSuggestions && query.trim() ? (
         <View style={styles.autocompleteResults}>
           {suggestions.length > 0 ? (
-            <ScrollView nestedScrollEnabled style={styles.autocompleteScrollArea}>
+            <ScrollView nestedScrollEnabled style={styles.autocompleteScrollArea} keyboardShouldPersistTaps="handled">
               {suggestions.map((student) => (
                 <TouchableOpacity
                   key={student.id}
@@ -704,7 +761,7 @@ function StudentAutocomplete({
                   onPress={() => handleSelect(student)}
                 >
                   <Text style={styles.autocompleteName}>{getStudentFullName(student)}</Text>
-                  <Text style={styles.autocompleteMeta}>{student.id} • {getClassroomName(student)}</Text>
+                  <Text style={styles.autocompleteMeta}>{getClassroomName(student)}</Text>
                 </TouchableOpacity>
               ))}
             </ScrollView>
@@ -716,7 +773,7 @@ function StudentAutocomplete({
 
       <Text style={styles.selectedLearnerText}>
         {selectedStudent
-          ? `Selected learner: ${getStudentFullName(selectedStudent)} (${selectedStudent.id}) • ${getClassroomName(selectedStudent)}`
+          ? `Selected learner: ${getStudentFullName(selectedStudent)} • ${getClassroomName(selectedStudent)}`
           : helperText}
       </Text>
     </View>
@@ -812,7 +869,7 @@ function LinkedStudentPicker({
                   >
                     <Text style={styles.autocompleteName}>{getStudentFullName(student)}</Text>
                     <Text style={styles.autocompleteMeta}>
-                      {student.id} • {getClassroomName(student)}{isLinked ? ' • linked' : ''}
+                      {getClassroomName(student)}{isLinked ? ' • linked' : ''}
                     </Text>
                   </TouchableOpacity>
                 );
@@ -904,7 +961,7 @@ export default function App() {
       <SafeAreaView style={styles.loginScreenContainer}>
         <View style={styles.loginCard}>
           <Text style={styles.loginTitle}>Loading access...</Text>
-          <Text style={styles.loginSubtitle}>Checking your Firebase sign-in and role permissions.</Text>
+          <Text style={styles.loginSubtitle}>Checking your sign-in details.</Text>
         </View>
       </SafeAreaView>
     );
@@ -929,10 +986,15 @@ export default function App() {
         >
           <Stack.Screen
             name="Home"
-            options={{ title: 'School Safety Modules' }}
+            options={{ title: 'Greenhill' }}
           >
             {(props) => <HomeScreen {...props} onLogout={handleLogout} loginIdentity={loginIdentity} />}
           </Stack.Screen>
+          <Stack.Screen
+            name="ProfileSettings"
+            component={ProfileSettingsScreen}
+            options={{ title: 'Profile & Settings' }}
+          />
           <Stack.Screen
             name="ManageUsers"
             component={ManageUsersScreen}
@@ -1000,36 +1062,35 @@ function HomeScreen({ navigation, onLogout, loginIdentity }) {
   const accessProfile = useAccessProfile();
   const roleLabel = formatRoleLabel(accessProfile.role);
   const isParentAccount = isParentRole(accessProfile);
-  const canEditStudents = hasPermission(accessProfile, 'canEditStudents');
   const canManageUsers = hasPermission(accessProfile, 'canManageUsers');
   const canExportReports = hasPermission(accessProfile, 'canExportReports');
+  const [isMenuVisible, setIsMenuVisible] = useState(false);
+
+  const closeMenu = () => {
+    setIsMenuVisible(false);
+  };
+
+  const handleOpenSettings = () => {
+    closeMenu();
+    navigation.navigate('ProfileSettings');
+  };
+
+  const handleLogoutFromMenu = () => {
+    closeMenu();
+    onLogout();
+  };
 
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={styles.formContainer}>
         <View style={styles.homeHeaderRow}>
           <View style={styles.homeHeaderTextWrap}>
-            <Text style={styles.title}>School Safety</Text>
-            <Text style={styles.subtitle}>Bana Pele daily compliance tools</Text>
+            <Text style={styles.title}>Greenhill</Text>
           </View>
 
-          <TouchableOpacity style={styles.logoutButton} onPress={onLogout}>
-            <Text style={styles.logoutButtonText}>Log out</Text>
+          <TouchableOpacity style={styles.burgerButton} onPress={() => setIsMenuVisible(true)}>
+            <Text style={styles.burgerButtonText}>☰</Text>
           </TouchableOpacity>
-        </View>
-
-        <Text style={styles.helperText}>
-          {isParentAccount
-            ? `Logged in as ${loginIdentity || 'Parent'} • ${roleLabel} access. You can view your linked child records and update medical details.`
-            : `Logged in as ${loginIdentity || 'Staff Member'} • ${roleLabel} access. Student editing is ${canEditStudents ? 'enabled' : 'view-only'} for this account.`}
-        </Text>
-
-        <View style={styles.infoBox}>
-          <Text style={styles.infoText}>
-            {isParentAccount
-              ? 'This parent account only shows the learner(s) linked to it. Attendance, incidents, and medicine history are read-only.'
-              : 'Access is tied to the signed-in Firebase user. You can change `role` or `permissions` later in Firestore under the `users` collection.'}
-          </Text>
         </View>
 
         <TouchableOpacity
@@ -1037,23 +1098,6 @@ function HomeScreen({ navigation, onLogout, loginIdentity }) {
           onPress={() => navigation.navigate('StudentDirectory')}
         >
           <Text style={styles.moduleTitle}>{isParentAccount ? 'My Child/Children' : 'Students'}</Text>
-          <Text style={styles.moduleSubtitle}>
-            {isParentAccount
-              ? 'View your linked child profile, attendance history, medicine log, and incident history'
-              : 'Emergency profiles, contacts, and class-level quick actions for attendance, incidents, and medicine logs'}
-          </Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.moduleCard}
-          onPress={() => navigation.navigate('Activities')}
-        >
-          <Text style={styles.moduleTitle}>Activities</Text>
-          <Text style={styles.moduleSubtitle}>
-            {isParentAccount
-              ? 'View activities done in your child\'s class'
-              : 'Log daily classroom activities and export activity reports'}
-          </Text>
         </TouchableOpacity>
 
         {!isParentAccount && canManageUsers ? (
@@ -1062,17 +1106,6 @@ function HomeScreen({ navigation, onLogout, loginIdentity }) {
             onPress={() => navigation.navigate('ManageUsers')}
           >
             <Text style={styles.moduleTitle}>Staff Access</Text>
-            <Text style={styles.moduleSubtitle}>Principal-only user roles, permissions, and account access control</Text>
-          </TouchableOpacity>
-        ) : null}
-
-        {!isParentAccount ? (
-          <TouchableOpacity
-            style={styles.moduleCard}
-            onPress={() => navigation.navigate('ComplianceDocuments')}
-          >
-            <Text style={styles.moduleTitle}>Compliance</Text>
-            <Text style={styles.moduleSubtitle}>Evacuation plans, DSD registration, health & safety, and other required ECD compliance documents</Text>
           </TouchableOpacity>
         ) : null}
 
@@ -1082,9 +1115,150 @@ function HomeScreen({ navigation, onLogout, loginIdentity }) {
             onPress={() => navigation.navigate('ComplianceReports')}
           >
             <Text style={styles.moduleTitle}>PDF Export</Text>
-            <Text style={styles.moduleSubtitle}>Download a professional compliance report with school name and date range.</Text>
           </TouchableOpacity>
         ) : null}
+
+        <Text style={styles.footerStatusText}>{`Logged in as ${loginIdentity || 'Staff Member'} - ${roleLabel} Access`}</Text>
+      </ScrollView>
+
+      <Modal
+        visible={isMenuVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={closeMenu}
+      >
+        <View style={styles.menuModalRoot}>
+          <TouchableOpacity style={styles.menuBackdrop} activeOpacity={1} onPress={closeMenu} />
+          <View style={styles.menuSheetWrap} pointerEvents="box-none">
+            <View style={styles.menuSheetCard}>
+              <TouchableOpacity style={styles.menuItemButton} onPress={handleOpenSettings}>
+                <Text style={styles.menuItemText}>Profile & Settings</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.menuItemButton} onPress={handleLogoutFromMenu}>
+                <Text style={styles.menuItemText}>Log out</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+    </SafeAreaView>
+  );
+}
+
+function ProfileSettingsScreen() {
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newEmail, setNewEmail] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
+
+  const handleSave = async () => {
+    const trimmedEmail = String(newEmail || '').trim();
+    const trimmedPassword = String(newPassword || '').trim();
+    const trimmedConfirm = String(confirmPassword || '').trim();
+
+    if (!trimmedEmail && !trimmedPassword) {
+      Alert.alert('No Changes', 'Enter a new email or a new password to update your profile.');
+      return;
+    }
+
+    if (trimmedPassword && trimmedPassword !== trimmedConfirm) {
+      Alert.alert('Password Mismatch', 'New password and confirm password must match.');
+      return;
+    }
+
+    try {
+      setIsSaving(true);
+      const result = await updateCurrentUserCredentials({
+        currentPassword,
+        newEmail: trimmedEmail,
+        newPassword: trimmedPassword,
+      });
+
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+      if (result?.emailUpdated) {
+        setNewEmail(result.email || '');
+      } else {
+        setNewEmail('');
+      }
+
+      Alert.alert('Updated', 'Your profile settings were updated successfully.');
+    } catch (error) {
+      const code = String(error?.code || '').trim();
+      if (code === 'auth/requires-recent-login') {
+        Alert.alert('Re-login Needed', 'For security, please log out and log in again before changing email or password.');
+        return;
+      }
+      if (code === 'auth/wrong-password' || code === 'auth/invalid-credential') {
+        Alert.alert('Could Not Verify', 'Current password is incorrect.');
+        return;
+      }
+      Alert.alert('Update Failed', error.message || 'Could not update profile settings.');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  return (
+    <SafeAreaView style={styles.container}>
+      <ScrollView contentContainerStyle={styles.formContainer} keyboardShouldPersistTaps="handled">
+        <Text style={styles.title}>Profile & Settings</Text>
+        <Text style={styles.subtitle}>Update your own email and password.</Text>
+
+        <View style={styles.infoBox}>
+          <Text style={styles.infoText}>Current password helps verify sensitive changes. If you leave it blank, Firebase may ask you to log in again first.</Text>
+        </View>
+
+        <Text style={styles.formSectionLabel}>Current Password (recommended)</Text>
+        <TextInput
+          style={styles.formInput}
+          placeholder="Current password"
+          placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+          value={currentPassword}
+          onChangeText={setCurrentPassword}
+          secureTextEntry
+        />
+
+        <Text style={styles.formSectionLabel}>New Email (optional)</Text>
+        <TextInput
+          style={styles.formInput}
+          placeholder="newemail@example.com"
+          placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+          value={newEmail}
+          onChangeText={setNewEmail}
+          autoCapitalize="none"
+          keyboardType="email-address"
+        />
+
+        <Text style={styles.formSectionLabel}>New Password (optional)</Text>
+        <TextInput
+          style={styles.formInput}
+          placeholder="At least 6 characters"
+          placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+          value={newPassword}
+          onChangeText={setNewPassword}
+          secureTextEntry
+        />
+
+        <Text style={styles.formSectionLabel}>Confirm New Password</Text>
+        <TextInput
+          style={styles.formInput}
+          placeholder="Re-enter new password"
+          placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+          value={confirmPassword}
+          onChangeText={setConfirmPassword}
+          secureTextEntry
+        />
+
+        <TouchableOpacity
+          style={[styles.saveStudentButton, isSaving && styles.saveStudentButtonDisabled]}
+          onPress={handleSave}
+          disabled={isSaving}
+        >
+          <Text style={styles.saveStudentButtonText}>{isSaving ? 'Saving...' : 'Save Settings'}</Text>
+        </TouchableOpacity>
       </ScrollView>
     </SafeAreaView>
   );
@@ -1390,10 +1564,8 @@ function StudentDirectoryScreen({ navigation }) {
 
   return (
     <SafeAreaView style={styles.container}>
-      <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
-        <View style={styles.screenContainer}>
-<Text style={styles.title}>{isParentAccount ? 'My Child/Children' : 'Emergency Info'}</Text>
-        <Text style={styles.subtitle}>{isParentAccount ? 'Your linked learner records' : 'Student Directory by Class'}</Text>
+      <View style={styles.screenContainer}>
+<Text style={styles.title}>{isParentAccount ? 'My Child/Children' : 'Students'}</Text>
 
         {canEditStudents ? (
           <TouchableOpacity
@@ -1429,7 +1601,7 @@ function StudentDirectoryScreen({ navigation }) {
             });
           }}
           placeholder={isParentAccount ? 'Quick search your child' : 'Quick learner search across all classes'}
-          helperText={isParentAccount ? 'Start typing your child name for instant access.' : 'Start typing a learner name and tap the matching result for instant access.'}
+          helperText={isParentAccount ? 'Start typing your child name for instant access.' : ''}
         />
 
         {loading ? <Text style={styles.statusText}>Loading students...</Text> : null}
@@ -1450,7 +1622,7 @@ function StudentDirectoryScreen({ navigation }) {
                 >
                   <View>
                     <Text style={styles.studentName}>{getStudentFullName(student)}</Text>
-                    <Text style={styles.studentClassText}>{student.id} • {getClassroomName(student)}</Text>
+                    <Text style={styles.studentClassText}>{getClassroomName(student)}</Text>
                     <Text style={styles.tapHint}>Tap to open your child record</Text>
                   </View>
                 </TouchableOpacity>
@@ -1474,7 +1646,6 @@ function StudentDirectoryScreen({ navigation }) {
             ))}
           </ScrollView>
         </View>
-      </TouchableWithoutFeedback>
     </SafeAreaView>
   );
 }
@@ -1749,7 +1920,7 @@ function StudentClassFolderScreen({ route, navigation }) {
               <View style={styles.itemHeaderRow}>
                 <TouchableOpacity onPress={() => navigation.navigate('EmergencyProfile', { student })}>
                   <Text style={styles.studentName}>{getStudentFullName(student)}</Text>
-                  <Text style={styles.studentClassText}>{student.id} • {getClassroomName(student)}</Text>
+                  <Text style={styles.studentClassText}>{getClassroomName(student)}</Text>
                   {isParentMarkedAbsent ? <Text style={styles.tapHint}>Parent marked this learner absent today.</Text> : null}
                 </TouchableOpacity>
                 <View style={[styles.statusBadge, statusStyleFor(attendanceEntry.status)]}>
@@ -1947,7 +2118,7 @@ function EmergencyProfileScreen({ route, navigation }) {
   const currentYear = parseInt(TODAY.split('-')[0], 10);
   const currentMonth = parseInt(TODAY.split('-')[1], 10);
   const currentDay = parseInt(TODAY.split('-')[2], 10);
-  const [parentAbsentYear, setParentAbsentYear] = useState(String(currentYear));
+  const parentAbsentYear = String(currentYear);
   const [parentAbsentMonth, setParentAbsentMonth] = useState(String(currentMonth).padStart(2, '0'));
   const [parentAbsentDay, setParentAbsentDay] = useState(String(currentDay).padStart(2, '0'));
   const parentAbsentDate = `${parentAbsentYear}-${parentAbsentMonth}-${parentAbsentDay}`;
@@ -1956,21 +2127,109 @@ function EmergencyProfileScreen({ route, navigation }) {
   );
   const hasParentMarkedAbsentForDate = Boolean(parentAbsentEntry?.parentReportedAbsent);
 
-  const refreshParentAttendanceHistory = useCallback(async () => {
-    if (!isParentAccount || !student?.id) {
+  const refreshStudentAttendanceHistory = useCallback(async () => {
+    if (!student?.id) {
       setAttendanceHistory([]);
       return;
     }
 
     const refreshedAttendance = await fetchAllAttendanceFromFirestore();
     const normalizedStudentId = String(student.id || '').trim();
+    const scopedAttendance = isParentAccount
+      ? filterRecordsByAccess(refreshedAttendance, accessProfile)
+      : refreshedAttendance;
+
     setAttendanceHistory(
-      filterRecordsByAccess(refreshedAttendance, accessProfile).filter((entry) => {
+      scopedAttendance.filter((entry) => {
         const entryStatus = String(entry.status || '').trim();
         return String(entry.studentId || '').trim() === normalizedStudentId && ['Absent', 'Late'].includes(entryStatus);
       }),
     );
   }, [isParentAccount, student?.id, accessProfile]);
+
+  const exportLearnerHistory = useCallback(async () => {
+    const escapeHtml = (value) => String(value || '')
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;')
+      .replaceAll('"', '&quot;')
+      .replaceAll("'", '&#39;');
+
+    const attendanceRows = attendanceHistory.map((entry) => `
+      <tr>
+        <td>${escapeHtml(entry.date || formatDateTime(entry.createdAt))}</td>
+        <td>${escapeHtml(entry.status || '')}</td>
+        <td>${escapeHtml(entry.reason || 'Not recorded')}</td>
+      </tr>
+    `).join('');
+
+    const incidentRows = incidentHistory.map((entry) => `
+      <tr>
+        <td>${escapeHtml(formatDateTime(entry.timestamp))}</td>
+        <td>${escapeHtml(entry.location || 'Incident')}</td>
+        <td>${escapeHtml(entry.description || '')}</td>
+        <td>${escapeHtml(entry.actionTaken || 'Not recorded')}</td>
+      </tr>
+    `).join('');
+
+    const medicineRows = medicineHistory.map((entry) => `
+      <tr>
+        <td>${escapeHtml(formatDateTime(entry.timeAdministered))}</td>
+        <td>${escapeHtml(entry.medicationName || 'Medication')}</td>
+        <td>${escapeHtml(entry.dosage || 'Not recorded')}</td>
+        <td>${escapeHtml(entry.staffMember || 'Not recorded')}</td>
+      </tr>
+    `).join('');
+
+    const html = `
+      <html>
+        <head>
+          <meta charset="utf-8" />
+          <style>
+            body { font-family: Arial, sans-serif; color: #102A43; padding: 18px; }
+            h1 { margin-bottom: 4px; font-size: 22px; }
+            h2 { margin-top: 18px; margin-bottom: 8px; font-size: 16px; }
+            p { margin: 2px 0; }
+            table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+            th, td { border: 1px solid #D9E2EC; padding: 8px; text-align: left; vertical-align: top; font-size: 12px; }
+            th { background: #F0F4F8; }
+          </style>
+        </head>
+        <body>
+          <h1>Learner History Export</h1>
+          <p><strong>Learner:</strong> ${escapeHtml(getStudentFullName(student))}</p>
+          <p><strong>Class:</strong> ${escapeHtml(getClassroomName(student))}</p>
+          <p><strong>Generated:</strong> ${escapeHtml(new Date().toLocaleString())}</p>
+
+          <h2>Attendance (Absent and Late only)</h2>
+          ${attendanceRows ? `<table><thead><tr><th>Date</th><th>Status</th><th>Reason</th></tr></thead><tbody>${attendanceRows}</tbody></table>` : '<p>No records found.</p>'}
+
+          <h2>Incident History</h2>
+          ${incidentRows ? `<table><thead><tr><th>Date/Time</th><th>Location</th><th>Description</th><th>Action Taken</th></tr></thead><tbody>${incidentRows}</tbody></table>` : '<p>No records found.</p>'}
+
+          <h2>Medicine Log History</h2>
+          ${medicineRows ? `<table><thead><tr><th>Date/Time</th><th>Medication</th><th>Dosage</th><th>Staff Member</th></tr></thead><tbody>${medicineRows}</tbody></table>` : '<p>No records found.</p>'}
+        </body>
+      </html>
+    `;
+
+    try {
+      const file = await Print.printToFileAsync({ html });
+      const canShare = await Sharing.isAvailableAsync();
+
+      if (canShare) {
+        await Sharing.shareAsync(file.uri, {
+          mimeType: 'application/pdf',
+          dialogTitle: 'Export Learner History',
+          UTI: 'com.adobe.pdf',
+        });
+      } else {
+        await Linking.openURL(file.uri);
+      }
+    } catch (error) {
+      Alert.alert('Export Failed', error.message || 'Could not export learner history.');
+    }
+  }, [attendanceHistory, incidentHistory, medicineHistory, student]);
 
   const handleDial = async (phoneNumber) => {
     if (!phoneNumber) {
@@ -2051,7 +2310,7 @@ function EmergencyProfileScreen({ route, navigation }) {
               };
 
               await saveAttendanceRecord(parentAbsentDate, attendanceEntry, 'Absent', parentReason);
-              await refreshParentAttendanceHistory();
+              await refreshStudentAttendanceHistory();
 
               Alert.alert('Saved', `Your absence notice for ${parentAbsentDate} was shared with staff.`);
             } catch (error) {
@@ -2093,7 +2352,7 @@ function EmergencyProfileScreen({ route, navigation }) {
               };
 
               await saveAttendanceRecord(parentAbsentDate, parentAbsentEntry || fallbackEntry, 'Present', '');
-              await refreshParentAttendanceHistory();
+              await refreshStudentAttendanceHistory();
 
               Alert.alert('Updated', `Absence notice for ${parentAbsentDate} was removed.`);
             } catch (error) {
@@ -2118,7 +2377,7 @@ function EmergencyProfileScreen({ route, navigation }) {
     let isActive = true;
 
     const loadParentHistory = async () => {
-      if (!isParentAccount || !student?.id) {
+      if (!student?.id) {
         setAttendanceHistory([]);
         setIncidentHistory([]);
         setMedicineHistory([]);
@@ -2139,14 +2398,18 @@ function EmergencyProfileScreen({ route, navigation }) {
         }
 
         const normalizedStudentId = String(student.id || '').trim();
+        const scopedAttendance = isParentAccount ? filterRecordsByAccess(attendanceData, accessProfile) : attendanceData;
+        const scopedIncidents = isParentAccount ? filterRecordsByAccess(incidentData, accessProfile) : incidentData;
+        const scopedMedicine = isParentAccount ? filterRecordsByAccess(medicineData, accessProfile) : medicineData;
+
         setAttendanceHistory(
-          filterRecordsByAccess(attendanceData, accessProfile).filter((entry) => {
+          scopedAttendance.filter((entry) => {
             const entryStatus = String(entry.status || '').trim();
             return String(entry.studentId || '').trim() === normalizedStudentId && ['Absent', 'Late'].includes(entryStatus);
           }),
         );
-        setIncidentHistory(filterRecordsByAccess(incidentData, accessProfile).filter((entry) => String(entry.studentId || '').trim() === normalizedStudentId));
-        setMedicineHistory(filterRecordsByAccess(medicineData, accessProfile).filter((entry) => String(entry.studentId || '').trim() === normalizedStudentId));
+        setIncidentHistory(scopedIncidents.filter((entry) => String(entry.studentId || '').trim() === normalizedStudentId));
+        setMedicineHistory(scopedMedicine.filter((entry) => String(entry.studentId || '').trim() === normalizedStudentId));
       } catch (error) {
         console.warn('Could not load parent history view.', error);
       } finally {
@@ -2189,7 +2452,7 @@ function EmergencyProfileScreen({ route, navigation }) {
               onPress={() => handleDial(contact.number)}
             >
               <Text style={styles.contactButtonText}>
-                Call {contact.name || `Emergency Contact ${index + 1}`}: {contact.number || 'No number saved'}
+                Call {contact.name || `Emergency Contact ${index + 1}`}: {formatPhoneForDisplay(contact.number)}
               </Text>
             </TouchableOpacity>
           ))}
@@ -2198,7 +2461,7 @@ function EmergencyProfileScreen({ route, navigation }) {
             style={[styles.contactButton, styles.doctorButton]}
             onPress={() => handleDial(student.doctorContact)}
           >
-            <Text style={styles.contactButtonText}>Call Doctor: {student.doctorContact || 'No number saved'}</Text>
+            <Text style={styles.contactButtonText}>Call Doctor: {formatPhoneForDisplay(student.doctorContact)}</Text>
           </TouchableOpacity>
         </View>
 
@@ -2248,12 +2511,11 @@ function EmergencyProfileScreen({ route, navigation }) {
             <CompactDatePickerModal
               visible={showParentAbsentDatePicker}
               onClose={() => setShowParentAbsentDatePicker(false)}
-              onDateSelect={(y, m, d) => {
-                setParentAbsentYear(y);
+              onDateSelect={(_, m, d) => {
                 setParentAbsentMonth(m);
                 setParentAbsentDay(d);
               }}
-              currentYear={parseInt(parentAbsentYear, 10)}
+              currentYear={currentYear}
               currentMonth={parentAbsentMonth}
               currentDay={parentAbsentDay}
             />
@@ -2276,42 +2538,42 @@ function EmergencyProfileScreen({ route, navigation }) {
           </TouchableOpacity>
         </View>
 
-        {isParentAccount ? (
-          <>
-            <Text style={styles.sectionTitle}>Attendance History</Text>
-            {historyLoading ? <Text style={styles.statusText}>Loading attendance history...</Text> : null}
-            {!historyLoading && attendanceHistory.length === 0 ? <Text style={styles.statusText}>No late or absent records yet.</Text> : null}
-            {attendanceHistory.slice(0, 12).map((entry) => (
-              <View key={entry.id} style={styles.timelineCard}>
-                <Text style={styles.studentName}>{entry.status}</Text>
-                <Text style={styles.timelineMeta}>{entry.date || formatDateTime(entry.createdAt)} • {entry.className || getClassroomName(student)}</Text>
-                {entry.reason ? <Text style={styles.timelineText}>Reason: {entry.reason}</Text> : null}
-              </View>
-            ))}
+        <Text style={styles.sectionTitle}>Attendance History</Text>
+        {historyLoading ? <Text style={styles.statusText}>Loading attendance history...</Text> : null}
+        {!historyLoading && attendanceHistory.length === 0 ? <Text style={styles.statusText}>No late or absent records yet.</Text> : null}
+        {attendanceHistory.slice(0, 12).map((entry) => (
+          <View key={entry.id} style={styles.timelineCard}>
+            <Text style={styles.studentName}>{entry.status}</Text>
+            <Text style={styles.timelineMeta}>{entry.date || formatDateTime(entry.createdAt)} • {entry.className || getClassroomName(student)}</Text>
+            {entry.reason ? <Text style={styles.timelineText}>Reason: {entry.reason}</Text> : null}
+          </View>
+        ))}
 
-            <Text style={styles.sectionTitle}>Incident History</Text>
-            {!historyLoading && incidentHistory.length === 0 ? <Text style={styles.statusText}>No incident records yet.</Text> : null}
-            {incidentHistory.slice(0, 12).map((entry) => (
-              <View key={entry.id} style={styles.timelineCard}>
-                <Text style={styles.studentName}>{entry.location || 'Incident'}</Text>
-                <Text style={styles.timelineMeta}>{formatDateTime(entry.timestamp)}</Text>
-                <Text style={styles.timelineText}>{entry.description}</Text>
-                <Text style={styles.tapHint}>Action taken: {entry.actionTaken || 'Not recorded'}</Text>
-              </View>
-            ))}
+        <Text style={styles.sectionTitle}>Incident History</Text>
+        {!historyLoading && incidentHistory.length === 0 ? <Text style={styles.statusText}>No incident records yet.</Text> : null}
+        {incidentHistory.slice(0, 12).map((entry) => (
+          <View key={entry.id} style={styles.timelineCard}>
+            <Text style={styles.studentName}>{entry.location || 'Incident'}</Text>
+            <Text style={styles.timelineMeta}>{formatDateTime(entry.timestamp)}</Text>
+            <Text style={styles.timelineText}>{entry.description}</Text>
+            <Text style={styles.tapHint}>Action taken: {entry.actionTaken || 'Not recorded'}</Text>
+          </View>
+        ))}
 
-            <Text style={styles.sectionTitle}>Medicine Log History</Text>
-            {!historyLoading && medicineHistory.length === 0 ? <Text style={styles.statusText}>No medicine entries yet.</Text> : null}
-            {medicineHistory.slice(0, 12).map((entry) => (
-              <View key={entry.id} style={styles.timelineCard}>
-                <Text style={styles.studentName}>{entry.medicationName || 'Medication'}</Text>
-                <Text style={styles.timelineMeta}>{formatDateTime(entry.timeAdministered)}</Text>
-                <Text style={styles.timelineText}>Dosage: {entry.dosage || 'Not recorded'}</Text>
-                <Text style={styles.tapHint}>Staff member: {entry.staffMember || 'Not recorded'}</Text>
-              </View>
-            ))}
-          </>
-        ) : null}
+        <Text style={styles.sectionTitle}>Medicine Log History</Text>
+        {!historyLoading && medicineHistory.length === 0 ? <Text style={styles.statusText}>No medicine entries yet.</Text> : null}
+        {medicineHistory.slice(0, 12).map((entry) => (
+          <View key={entry.id} style={styles.timelineCard}>
+            <Text style={styles.studentName}>{entry.medicationName || 'Medication'}</Text>
+            <Text style={styles.timelineMeta}>{formatDateTime(entry.timeAdministered)}</Text>
+            <Text style={styles.timelineText}>Dosage: {entry.dosage || 'Not recorded'}</Text>
+            <Text style={styles.tapHint}>Staff member: {entry.staffMember || 'Not recorded'}</Text>
+          </View>
+        ))}
+
+        <TouchableOpacity style={styles.reportButton} onPress={exportLearnerHistory}>
+          <Text style={styles.saveStudentButtonText}>Export Learner History</Text>
+        </TouchableOpacity>
 
         <Modal
           visible={isPinModalVisible}
@@ -2974,10 +3236,10 @@ function ActivitiesScreen({ navigation }) {
   const [showExportModal, setShowExportModal] = useState(false);
   const [showStartPicker, setShowStartPicker] = useState(false);
   const [showEndPicker, setShowEndPicker] = useState(false);
-  const [startYear, setStartYear] = useState(String(currentYear));
+  const startYear = String(currentYear);
   const [startMonth, setStartMonth] = useState(String(currentMonth).padStart(2, '0'));
   const [startDay, setStartDay] = useState(String(currentDay).padStart(2, '0'));
-  const [endYear, setEndYear] = useState(String(currentYear));
+  const endYear = String(currentYear);
   const [endMonth, setEndMonth] = useState(String(currentMonth).padStart(2, '0'));
   const [endDay, setEndDay] = useState(String(currentDay).padStart(2, '0'));
   const [exporting, setExporting] = useState(false);
@@ -3358,12 +3620,11 @@ function ActivitiesScreen({ navigation }) {
         <CompactDatePickerModal
           visible={showStartPicker}
           onClose={() => setShowStartPicker(false)}
-          onDateSelect={(y, m, d) => {
-            setStartYear(y);
+          onDateSelect={(_, m, d) => {
             setStartMonth(m);
             setStartDay(d);
           }}
-          currentYear={parseInt(startYear, 10)}
+          currentYear={currentYear}
           currentMonth={startMonth}
           currentDay={startDay}
         />
@@ -3371,12 +3632,11 @@ function ActivitiesScreen({ navigation }) {
         <CompactDatePickerModal
           visible={showEndPicker}
           onClose={() => setShowEndPicker(false)}
-          onDateSelect={(y, m, d) => {
-            setEndYear(y);
+          onDateSelect={(_, m, d) => {
             setEndMonth(m);
             setEndDay(d);
           }}
-          currentYear={parseInt(endYear, 10)}
+          currentYear={currentYear}
           currentMonth={endMonth}
           currentDay={endDay}
         />
@@ -4023,10 +4283,10 @@ function ComplianceReportsScreen({ navigation }) {
   const currentMonth = parseInt(TODAY.split('-')[1], 10);
   const currentDay = parseInt(TODAY.split('-')[2], 10);
 
-  const [startYear, setStartYear] = useState(String(currentYear));
+  const startYear = String(currentYear);
   const [startMonth, setStartMonth] = useState(String(currentMonth).padStart(2, '0'));
   const [startDay, setStartDay] = useState(String(currentDay).padStart(2, '0'));
-  const [endYear, setEndYear] = useState(String(currentYear));
+  const endYear = String(currentYear);
   const [endMonth, setEndMonth] = useState(String(currentMonth).padStart(2, '0'));
   const [endDay, setEndDay] = useState(String(currentDay).padStart(2, '0'));
 
@@ -4109,12 +4369,11 @@ function ComplianceReportsScreen({ navigation }) {
         <CompactDatePickerModal
           visible={showStartPicker}
           onClose={() => setShowStartPicker(false)}
-          onDateSelect={(y, m, d) => {
-            setStartYear(y);
+          onDateSelect={(_, m, d) => {
             setStartMonth(m);
             setStartDay(d);
           }}
-          currentYear={parseInt(startYear, 10)}
+          currentYear={currentYear}
           currentMonth={startMonth}
           currentDay={startDay}
         />
@@ -4122,12 +4381,11 @@ function ComplianceReportsScreen({ navigation }) {
         <CompactDatePickerModal
           visible={showEndPicker}
           onClose={() => setShowEndPicker(false)}
-          onDateSelect={(y, m, d) => {
-            setEndYear(y);
+          onDateSelect={(_, m, d) => {
             setEndMonth(m);
             setEndDay(d);
           }}
-          currentYear={parseInt(endYear, 10)}
+          currentYear={currentYear}
           currentMonth={endMonth}
           currentDay={endDay}
         />
@@ -4142,7 +4400,7 @@ function CompactDatePickerColumn({ items, selectedValue, onSelect, label }) {
 
   const currentIndex = items.indexOf(selectedValue);
 
-  const handleMomentumScrollEnd = (event) => {
+  const updateSelectionFromOffset = (event) => {
     const offsetY = event.nativeEvent.contentOffset.y;
     const index = Math.round(offsetY / itemHeight);
     if (index >= 0 && index < items.length) {
@@ -4169,9 +4427,12 @@ function CompactDatePickerColumn({ items, selectedValue, onSelect, label }) {
           scrollEventThrottle={16}
           snapToInterval={itemHeight}
           decelerationRate="fast"
+          nestedScrollEnabled
           showsVerticalScrollIndicator={false}
-          onMomentumScrollEnd={handleMomentumScrollEnd}
+          onMomentumScrollEnd={updateSelectionFromOffset}
+          onScrollEndDrag={updateSelectionFromOffset}
           style={styles.compactDatePickerScroll}
+          contentContainerStyle={styles.compactDatePickerScrollContent}
         >
           {items.map((item) => (
             <View key={item} style={{ height: itemHeight, justifyContent: 'center', alignItems: 'center' }}>
@@ -4428,1240 +4689,4 @@ function StudentFormScreen({ navigation, route }) {
   );
 }
 
-const styles = StyleSheet.create({
-  loginScreenContainer: {
-    flex: 1,
-    backgroundColor: '#F8F9FA',
-    justifyContent: 'center',
-    padding: 24,
-  },
-  loginCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 8,
-    padding: 24,
-    borderWidth: 1,
-    borderColor: '#E8EAED',
-    shadowColor: '#000000',
-    shadowOpacity: 0.08,
-    shadowRadius: 3,
-    shadowOffset: { width: 0, height: 1 },
-    elevation: 1,
-  },
-  loginTitle: {
-    fontSize: 26,
-    fontWeight: '600',
-    color: '#202124',
-    marginBottom: 8,
-  },
-  loginSubtitle: {
-    fontSize: 15,
-    color: '#3C4043',
-    marginBottom: 14,
-    lineHeight: 24,
-  },
-  loginButton: {
-    marginTop: 4,
-    backgroundColor: '#1A73E8',
-    borderRadius: 6,
-    alignItems: 'center',
-    paddingVertical: 13,
-  },
-  loginHint: {
-    marginTop: 12,
-    color: '#80868B',
-    textAlign: 'center',
-    fontSize: 13,
-  },
-  container: {
-    flex: 1,
-    backgroundColor: '#F8F9FA',
-  },
-  screenContainer: {
-    flex: 1,
-    padding: 24,
-  },
-  formContainer: {
-    padding: 24,
-    paddingBottom: 40,
-  },
-  homeHeaderRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    gap: 12,
-  },
-  homeHeaderTextWrap: {
-    flex: 1,
-  },
-  logoutButton: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 6,
-    borderWidth: 1,
-    borderColor: '#E8EAED',
-    paddingVertical: 10,
-    paddingHorizontal: 16,
-    minHeight: 40,
-    justifyContent: 'center',
-  },
-  logoutButtonText: {
-    color: '#3C4043',
-    fontWeight: '600',
-  },
-  title: {
-    fontSize: 28,
-    fontWeight: '600',
-    color: '#202124',
-  },
-  subtitle: {
-    fontSize: 15,
-    color: '#3C4043',
-    marginBottom: 8,
-    lineHeight: 24,
-  },
-  helperText: {
-    color: '#80868B',
-    marginBottom: 12,
-    lineHeight: 24,
-    fontSize: 14,
-  },
-  addStudentButton: {
-    alignSelf: 'flex-start',
-    backgroundColor: '#1A73E8',
-    borderRadius: 6,
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    minHeight: 44,
-    justifyContent: 'center',
-    marginBottom: 12,
-  },
-  addStudentButtonText: {
-    color: '#FFFFFF',
-    fontWeight: '700',
-  },
-  moduleCard: {
-    marginTop: 8,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 8,
-    padding: 24,
-    borderWidth: 1,
-    borderColor: '#E8EAED',
-    shadowColor: '#000000',
-    shadowOpacity: 0.08,
-    shadowRadius: 3,
-    shadowOffset: { width: 0, height: 1 },
-    elevation: 1,
-  },
-  moduleTitle: {
-    fontSize: 20,
-    fontWeight: '600',
-    color: '#202124',
-    marginBottom: 4,
-  },
-  moduleSubtitle: {
-    color: '#3C4043',
-    fontSize: 14,
-    fontWeight: '400',
-    lineHeight: 22,
-  },
-  folderHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 12,
-  },
-  folderTextWrap: {
-    flex: 1,
-  },
-  folderToggleText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#1A73E8',
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-  },
-  folderContentCard: {
-    marginTop: -4,
-    marginBottom: 12,
-    paddingHorizontal: 4,
-  },
-  searchInput: {
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#E8EAED',
-    borderRadius: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 12,
-    marginBottom: 16,
-    fontSize: 15,
-    color: '#3C4043',
-  },
-  listContent: {
-    paddingBottom: 14,
-  },
-  classSectionCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 8,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: '#E8EAED',
-    marginBottom: 12,
-  },
-  classHeaderRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 8,
-    gap: 8,
-  },
-  classSectionTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#202124',
-  },
-  classCountText: {
-    color: '#80868B',
-    fontWeight: '600',
-  },
-  studentItem: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 8,
-    padding: 20,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: '#E8EAED',
-    shadowColor: '#000000',
-    shadowOpacity: 0.08,
-    shadowRadius: 3,
-    shadowOffset: { width: 0, height: 1 },
-    elevation: 1,
-  },
-  sectionCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 8,
-    padding: 20,
-    borderWidth: 1,
-    borderColor: '#E8EAED',
-    marginBottom: 16,
-    shadowColor: '#000000',
-    shadowOpacity: 0.08,
-    shadowRadius: 3,
-    shadowOffset: { width: 0, height: 1 },
-    elevation: 1,
-  },
-  studentName: {
-    fontSize: 18,
-    color: '#202124',
-    fontWeight: '600',
-  },
-  studentClassText: {
-    marginTop: 4,
-    color: '#80868B',
-    fontWeight: '500',
-    fontSize: 14,
-  },
-  tapHint: {
-    marginTop: 5,
-    color: '#80868B',
-    fontWeight: '400',
-    fontSize: 13,
-  },
-  statusText: {
-    color: '#3C4043',
-    marginBottom: 10,
-  },
-  errorText: {
-    color: '#B91C1C',
-    marginBottom: 10,
-    fontWeight: '600',
-  },
-  profileName: {
-    fontSize: 29,
-    color: '#202124',
-    fontWeight: '600',
-    marginBottom: 10,
-  },
-  editStudentButton: {
-    alignSelf: 'flex-start',
-    marginBottom: 16,
-    backgroundColor: '#1A73E8',
-    borderRadius: 6,
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    minHeight: 44,
-    justifyContent: 'center',
-  },
-  editStudentButtonText: {
-    color: '#FFFFFF',
-    fontWeight: '700',
-  },
-  quickLogRow: {
-    marginTop: 10,
-    flexDirection: 'row',
-    gap: 8,
-    flexWrap: 'wrap',
-  },
-  quickLogButton: {
-    backgroundColor: '#1A73E8',
-    borderRadius: 6,
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    minHeight: 44,
-    justifyContent: 'center',
-  },
-  quickLogButtonText: {
-    color: '#FFFFFF',
-    fontWeight: '700',
-  },
-  quickLogButtonSecondary: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 6,
-    borderWidth: 1,
-    borderColor: '#E8EAED',
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    minHeight: 44,
-    justifyContent: 'center',
-  },
-  quickLogButtonSecondaryText: {
-    color: '#3C4043',
-    fontWeight: '600',
-  },
-  undoAbsentButton: {
-    marginTop: 8,
-    alignSelf: 'flex-start',
-    backgroundColor: '#FFFFFF',
-    borderRadius: 6,
-    borderWidth: 1,
-    borderColor: '#E8EAED',
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    minHeight: 44,
-    justifyContent: 'center',
-  },
-  undoAbsentButtonText: {
-    color: '#3C4043',
-    fontWeight: '600',
-  },
-  card: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 8,
-    padding: 24,
-    borderWidth: 1,
-    borderColor: '#E8EAED',
-    marginBottom: 16,
-    shadowColor: '#000000',
-    shadowOpacity: 0.08,
-    shadowRadius: 3,
-    shadowOffset: { width: 0, height: 1 },
-    elevation: 1,
-  },
-  sectionTitle: {
-    fontSize: 17,
-    fontWeight: '600',
-    marginTop: 16,
-    marginBottom: 8,
-    color: '#202124',
-  },
-  contactButton: {
-    backgroundColor: '#1A73E8',
-    borderRadius: 6,
-    paddingVertical: 12,
-    paddingHorizontal: 12,
-    marginBottom: 8,
-  },
-  doctorButton: {
-    backgroundColor: '#2F855A',
-  },
-  contactButtonText: {
-    color: '#FFFFFF',
-    fontWeight: '600',
-    fontSize: 14,
-  },
-  allergyAlertCard: {
-    backgroundColor: '#FFF3E8',
-    borderColor: '#E8590C',
-    borderWidth: 2,
-  },
-  noAllergyCard: {
-    backgroundColor: '#E8F5E9',
-    borderColor: '#2F855A',
-  },
-  allergyText: {
-    color: '#7C2D12',
-    fontWeight: '700',
-    fontSize: 16,
-  },
-  vaultText: {
-    fontSize: 15,
-    color: '#3C4043',
-    marginBottom: 7,
-    lineHeight: 24,
-  },
-  vaultToggleButton: {
-    marginTop: 10,
-    backgroundColor: '#1A73E8',
-    borderRadius: 6,
-    paddingVertical: 12,
-    alignItems: 'center',
-  },
-  vaultToggleButtonText: {
-    color: '#FFFFFF',
-    fontWeight: '700',
-  },
-  modalBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    justifyContent: 'center',
-    padding: 24,
-  },
-  modalCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 8,
-    padding: 24,
-    borderWidth: 1,
-    borderColor: '#E8EAED',
-  },
-  modalTitle: {
-    fontSize: 20,
-    fontWeight: '600',
-    color: '#202124',
-    marginBottom: 8,
-  },
-  modalText: {
-    fontSize: 14,
-    color: '#3C4043',
-    marginBottom: 12,
-    lineHeight: 22,
-  },
-  pinInput: {
-    borderWidth: 1,
-    borderColor: '#E8EAED',
-    borderRadius: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    fontSize: 16,
-    marginBottom: 12,
-  },
-  modalButtonsRow: {
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-    gap: 12,
-  },
-  modalButtonSecondary: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 6,
-    borderWidth: 1,
-    borderColor: '#E8EAED',
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    minHeight: 44,
-    justifyContent: 'center',
-  },
-  modalButtonSecondaryText: {
-    color: '#3C4043',
-    fontWeight: '600',
-  },
-  modalButtonPrimary: {
-    backgroundColor: '#1A73E8',
-    borderRadius: 6,
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    minHeight: 44,
-    justifyContent: 'center',
-  },
-  modalButtonPrimaryText: {
-    color: '#FFFFFF',
-    fontWeight: '700',
-  },
-  formTitle: {
-    fontSize: 24,
-    color: '#202124',
-    fontWeight: '600',
-    marginBottom: 14,
-  },
-  formSectionLabel: {
-    color: '#80868B',
-    fontWeight: '600',
-    marginBottom: 6,
-    marginTop: 4,
-    fontSize: 13,
-  },
-  formInput: {
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#E8EAED',
-    borderRadius: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 11,
-    marginBottom: 12,
-    fontSize: 15,
-    color: '#3C4043',
-  },
-  reasonInput: {
-    minHeight: 48,
-    textAlignVertical: 'top',
-  },
-  saveStudentButton: {
-    marginTop: 8,
-    marginBottom: 16,
-    backgroundColor: '#1A73E8',
-    borderRadius: 6,
-    alignItems: 'center',
-    paddingVertical: 12,
-    minHeight: 44,
-    justifyContent: 'center',
-  },
-  saveStudentButtonDisabled: {
-    backgroundColor: '#94A3B8',
-  },
-  saveStudentButtonText: {
-    color: '#FFFFFF',
-    fontWeight: '600',
-    fontSize: 15,
-  },
-  itemHeaderRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    gap: 12,
-  },
-  statusBadge: {
-    borderRadius: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-  },
-  statusBadgePresent: {
-    backgroundColor: '#D3F9D8',
-  },
-  statusBadgeLate: {
-    backgroundColor: '#FFF3BF',
-  },
-  statusBadgeAbsent: {
-    backgroundColor: '#FFE3E3',
-  },
-  statusBadgeText: {
-    fontWeight: '600',
-    color: '#3C4043',
-  },
-  actionRow: {
-    flexDirection: 'row',
-    gap: 8,
-    flexWrap: 'wrap',
-  },
-  statusActionButton: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 6,
-    borderWidth: 1,
-    borderColor: '#E8EAED',
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    minHeight: 44,
-    justifyContent: 'center',
-  },
-  statusActionButtonSelected: {
-    backgroundColor: '#1A73E8',
-    borderColor: '#1A73E8',
-  },
-  statusActionButtonText: {
-    color: '#3C4043',
-    fontWeight: '600',
-  },
-  chipContainer: {
-    paddingBottom: 10,
-    gap: 8,
-  },
-  chipButton: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 6,
-    borderWidth: 1,
-    borderColor: '#E8EAED',
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    marginRight: 8,
-    minHeight: 40,
-    justifyContent: 'center',
-  },
-  chipButtonSelected: {
-    backgroundColor: '#1A73E8',
-    borderColor: '#1A73E8',
-  },
-  chipButtonText: {
-    color: '#3C4043',
-    fontWeight: '600',
-  },
-  selectedActionText: {
-    color: '#FFFFFF',
-  },
-  autocompleteContainer: {
-    marginBottom: 10,
-  },
-  searchInputRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#E8EAED',
-    borderRadius: 6,
-    paddingRight: 8,
-    marginBottom: 16,
-  },
-  autocompleteTextInput: {
-    flex: 1,
-    paddingHorizontal: 12,
-    paddingVertical: 12,
-    color: '#3C4043',
-  },
-  clearSearchButton: {
-    width: 30,
-    height: 30,
-    borderRadius: 6,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#F1F3F4',
-  },
-  clearSearchButtonText: {
-    color: '#80868B',
-    fontSize: 18,
-    fontWeight: '800',
-    lineHeight: 20,
-  },
-  autocompleteResults: {
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#E8EAED',
-    borderRadius: 6,
-    marginTop: -4,
-    marginBottom: 8,
-    overflow: 'hidden',
-  },
-  autocompleteScrollArea: {
-    maxHeight: 156,
-  },
-  autocompleteItem: {
-    paddingHorizontal: 12,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#E8EAED',
-    minHeight: 48,
-    justifyContent: 'center',
-  },
-  autocompleteName: {
-    color: '#202124',
-    fontWeight: '600',
-  },
-  autocompleteMeta: {
-    color: '#80868B',
-    marginTop: 2,
-    fontSize: 12,
-  },
-  autocompleteEmpty: {
-    color: '#80868B',
-    paddingHorizontal: 12,
-    paddingVertical: 12,
-  },
-  selectedLearnerText: {
-    color: '#80868B',
-    fontSize: 13,
-    marginTop: -2,
-    marginBottom: 4,
-  },
-  warningCard: {
-    backgroundColor: '#FFF3E8',
-    borderColor: '#E8590C',
-    borderWidth: 1,
-    borderRadius: 12,
-    padding: 12,
-    marginBottom: 10,
-  },
-  warningText: {
-    color: '#C2410C',
-    fontWeight: '700',
-  },
-  timelineCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 8,
-    padding: 20,
-    borderWidth: 1,
-    borderColor: '#E8EAED',
-    marginBottom: 12,
-    shadowColor: '#000000',
-    shadowOpacity: 0.08,
-    shadowRadius: 3,
-    shadowOffset: { width: 0, height: 1 },
-    elevation: 1,
-  },
-  timelineMeta: {
-    color: '#80868B',
-    marginTop: 4,
-    marginBottom: 8,
-  },
-  timelineText: {
-    color: '#3C4043',
-    marginBottom: 6,
-    lineHeight: 20,
-  },
-  lockText: {
-    color: '#7C2D12',
-    fontWeight: '700',
-    marginTop: 6,
-  },
-  infoBox: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#E8EAED',
-    padding: 12,
-    marginBottom: 16,
-  },
-  infoText: {
-    color: '#3C4043',
-    lineHeight: 22,
-    fontSize: 14,
-  },
-  reportButton: {
-    marginTop: 8,
-    backgroundColor: '#1A73E8',
-    borderRadius: 6,
-    alignItems: 'center',
-    paddingVertical: 12,
-    minHeight: 44,
-    justifyContent: 'center',
-  },
-  complianceFolderCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#E8EAED',
-    padding: 14,
-    marginBottom: 12,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-  },
-  complianceFolderIconWrap: {
-    width: 44,
-    height: 44,
-    borderRadius: 6,
-    backgroundColor: '#F1F3F4',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  complianceFolderIcon: {
-    fontSize: 22,
-  },
-  complianceFolderTextWrap: {
-    flex: 1,
-  },
-  complianceFolderLabel: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: '#202124',
-    marginBottom: 2,
-  },
-  complianceFolderDesc: {
-    fontSize: 12,
-    color: '#80868B',
-    lineHeight: 16,
-  },
-  complianceFolderChevron: {
-    fontSize: 13,
-    color: '#1A73E8',
-    fontWeight: '600',
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-  },
-  complianceEmptyState: {
-    alignItems: 'center',
-    paddingVertical: 32,
-  },
-  complianceEmptyIcon: {
-    fontSize: 40,
-    marginBottom: 10,
-  },
-  complianceEmptyText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#3C4043',
-    marginBottom: 6,
-  },
-  complianceEmptyHint: {
-    fontSize: 13,
-    color: '#80868B',
-    textAlign: 'center',
-  },
-  complianceDocCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#E8EAED',
-    marginBottom: 12,
-    overflow: 'hidden',
-  },
-  complianceDocMain: {
-    flexDirection: 'row',
-    padding: 14,
-    alignItems: 'flex-start',
-    gap: 10,
-  },
-  complianceDocIcon: {
-    fontSize: 28,
-    marginTop: 2,
-  },
-  complianceDocTextWrap: {
-    flex: 1,
-  },
-  complianceDocName: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#202124',
-    marginBottom: 4,
-  },
-  complianceDocMeta: {
-    fontSize: 12,
-    color: '#80868B',
-    marginBottom: 2,
-  },
-  complianceDocNotes: {
-    fontSize: 12,
-    color: '#3C4043',
-    marginTop: 4,
-    fontStyle: 'italic',
-  },
-  complianceDocActions: {
-    flexDirection: 'row',
-    borderTopWidth: 1,
-    borderTopColor: '#E8EAED',
-  },
-  complianceOpenBtn: {
-    flex: 1,
-    paddingVertical: 10,
-    alignItems: 'center',
-    backgroundColor: '#F8F9FA',
-  },
-  complianceOpenBtnText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#1A73E8',
-  },
-  complianceDeleteBtn: {
-    paddingVertical: 10,
-    paddingHorizontal: 20,
-    alignItems: 'center',
-    backgroundColor: '#FFFFFF',
-    borderLeftWidth: 1,
-    borderLeftColor: '#E8EAED',
-  },
-  complianceDeleteBtnText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#3C4043',
-  },
-  complianceUploadSection: {
-    marginTop: 16,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#E8EAED',
-    padding: 20,
-  },
-  complianceUploadTitle: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: '#202124',
-    marginBottom: 10,
-  },
-  complianceUploadBtn: {
-    backgroundColor: '#1A73E8',
-    borderRadius: 6,
-    alignItems: 'center',
-    paddingVertical: 12,
-    minHeight: 44,
-    justifyContent: 'center',
-    marginTop: 4,
-    marginBottom: 8,
-  },
-  complianceUploadBtnText: {
-    color: '#FFFFFF',
-    fontWeight: '700',
-    fontSize: 15,
-  },
-  dateRangeLabel: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#202124',
-    marginTop: 16,
-    marginBottom: 12,
-  },
-  datePickerRow: {
-    flexDirection: 'row',
-    gap: 12,
-    marginBottom: 16,
-  },
-  datePickerColumnContainer: {
-    flex: 1,
-  },
-  datePickerLabel: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#80868B',
-    marginBottom: 6,
-    textAlign: 'center',
-  },
-  datePickerScrollBound: {
-    height: 180,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 6,
-    borderWidth: 1,
-    borderColor: '#E8EAED',
-    overflow: 'hidden',
-    position: 'relative',
-  },
-  datePickerScroll: {
-    flex: 1,
-  },
-  datePickerItem: {
-    fontSize: 16,
-    fontWeight: '500',
-    color: '#80868B',
-  },
-  datePickerItemSelected: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#202124',
-  },
-  datePickerOverlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    borderTopWidth: 1,
-    borderBottomWidth: 1,
-    borderTopColor: 'rgba(16, 42, 67, 0.1)',
-    borderBottomColor: 'rgba(16, 42, 67, 0.1)',
-    top: 65,
-    height: 50,
-    pointerEvents: 'none',
-    zIndex: 10,
-  },
-  compactDateRangeContainer: {
-    flexDirection: 'row',
-    gap: 12,
-    marginVertical: 16,
-  },
-  compactDateFieldWrapper: {
-    flex: 1,
-  },
-  compactDateLabel: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#80868B',
-    marginBottom: 6,
-  },
-  compactDateField: {
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#E8EAED',
-    borderRadius: 6,
-    paddingVertical: 12,
-    paddingHorizontal: 10,
-    justifyContent: 'center',
-  },
-  compactDateFieldText: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: '#3C4043',
-  },
-  datePickerBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  datePickerModalCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 8,
-    padding: 20,
-    width: '85%',
-    maxWidth: 350,
-  },
-  datePickerModalTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#202124',
-    marginBottom: 16,
-    textAlign: 'center',
-  },
-  compactDatePickerRow: {
-    flexDirection: 'row',
-    gap: 8,
-    marginBottom: 16,
-  },
-  datePickerModalButtonRow: {
-    flexDirection: 'row',
-    gap: 10,
-    justifyContent: 'flex-end',
-  },
-  datePickerModalCancelBtn: {
-    paddingVertical: 10,
-    paddingHorizontal: 16,
-    borderRadius: 6,
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#E8EAED',
-  },
-  datePickerModalCancelText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#3C4043',
-  },
-  datePickerModalConfirmBtn: {
-    paddingVertical: 10,
-    paddingHorizontal: 20,
-    borderRadius: 6,
-    backgroundColor: '#1A73E8',
-  },
-  datePickerModalConfirmText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#FFFFFF',
-  },
-  compactDatePickerColumnContainer: {
-    flex: 1,
-  },
-  compactDatePickerLabel: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: '#80868B',
-    marginBottom: 6,
-    textAlign: 'center',
-  },
-  compactDatePickerScrollBound: {
-    height: 120,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 6,
-    borderWidth: 1,
-    borderColor: '#E8EAED',
-    overflow: 'hidden',
-    position: 'relative',
-  },
-  compactDatePickerScroll: {
-    flex: 1,
-  },
-  compactDatePickerItem: {
-    fontSize: 13,
-    fontWeight: '500',
-    color: '#80868B',
-  },
-  compactDatePickerItemSelected: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: '#202124',
-  },
-  compactDatePickerOverlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    borderTopWidth: 1,
-    borderBottomWidth: 1,
-    borderTopColor: 'rgba(16, 42, 67, 0.1)',
-    borderBottomColor: 'rgba(16, 42, 67, 0.1)',
-    top: 40,
-    height: 40,
-    pointerEvents: 'none',
-    zIndex: 10,
-  },
-  formTextArea: {
-    minHeight: 96,
-    textAlignVertical: 'top',
-  },
-  successBanner: {
-    backgroundColor: '#DCFCE7',
-    borderRadius: 6,
-    padding: 14,
-    marginBottom: 12,
-    alignItems: 'center',
-  },
-  successBannerText: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: '#166534',
-  },
-  activityFilterRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-    marginBottom: 16,
-  },
-  activityFilterChip: {
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    borderRadius: 6,
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#E8EAED',
-  },
-  activityFilterChipActive: {
-    backgroundColor: '#E8F0FE',
-    borderColor: '#1A73E8',
-  },
-  activityFilterChipText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#3C4043',
-  },
-  activityFilterChipTextActive: {
-    color: '#1A73E8',
-  },
-  activityLogButton: {
-    backgroundColor: '#1A73E8',
-    borderRadius: 6,
-    alignItems: 'center',
-    paddingVertical: 12,
-    minHeight: 44,
-    justifyContent: 'center',
-    marginBottom: 16,
-  },
-  activityLogButtonText: {
-    color: '#FFFFFF',
-    fontWeight: '700',
-    fontSize: 15,
-  },
-  activityCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#E8EAED',
-    padding: 20,
-    marginBottom: 12,
-    shadowColor: '#000000',
-    shadowOpacity: 0.08,
-    shadowRadius: 3,
-    shadowOffset: { width: 0, height: 1 },
-    elevation: 1,
-  },
-  activityCardHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    marginBottom: 8,
-  },
-  activityCardHeaderText: {
-    flex: 1,
-    marginRight: 8,
-  },
-  activityCardName: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#202124',
-    marginBottom: 2,
-  },
-  activityCardMeta: {
-    fontSize: 13,
-    color: '#80868B',
-  },
-  activityCardBadge: {
-    backgroundColor: '#E8F0FE',
-    borderRadius: 6,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-  },
-  activityCardBadgeText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#1A73E8',
-  },
-  activityCardDetail: {
-    fontSize: 14,
-    color: '#3C4043',
-    marginBottom: 4,
-    lineHeight: 22,
-  },
-  activityCardBody: {
-    fontSize: 14,
-    color: '#3C4043',
-    lineHeight: 22,
-    marginTop: 4,
-    marginBottom: 4,
-  },
-  activityCardFooter: {
-    fontSize: 12,
-    color: '#80868B',
-    marginTop: 6,
-  },
-  activityDeleteButton: {
-    marginTop: 10,
-    paddingVertical: 6,
-    paddingHorizontal: 14,
-    borderRadius: 6,
-    backgroundColor: '#FFF5F5',
-    borderWidth: 1,
-    borderColor: '#FECACA',
-  },
-  activityDeleteButtonText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#C92A2A',
-  },
-  activityFilePickButton: {
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#E8EAED',
-    borderRadius: 6,
-    alignItems: 'center',
-    paddingVertical: 12,
-    minHeight: 44,
-    justifyContent: 'center',
-    marginBottom: 6,
-  },
-  activityFilePickButtonText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#1A73E8',
-  },
-  activityRemoveFile: {
-    fontSize: 13,
-    color: '#C92A2A',
-    textAlign: 'center',
-    marginBottom: 12,
-  },
-  activityCardActionsRow: {
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-    gap: 8,
-    marginTop: 10,
-  },
-  activityEditButton: {
-    paddingVertical: 10,
-    paddingHorizontal: 16,
-    borderRadius: 6,
-    backgroundColor: '#E8F0FE',
-    borderWidth: 1,
-    borderColor: '#1A73E8',
-    minHeight: 40,
-    justifyContent: 'center',
-  },
-  activityEditButtonText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#1A73E8',
-  },
-  activityDetailRow: {
-    marginBottom: 10,
-  },
-  activityDetailLabel: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#80868B',
-    marginBottom: 2,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  activityDetailValue: {
-    fontSize: 14,
-    color: '#3C4043',
-    lineHeight: 22,
-  },
-});
+

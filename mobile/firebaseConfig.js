@@ -1,5 +1,15 @@
 import { getApp, getApps, initializeApp } from 'firebase/app';
-import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'firebase/auth';
+import {
+  EmailAuthProvider,
+  getAuth,
+  onAuthStateChanged,
+  reauthenticateWithCredential,
+  sendPasswordResetEmail,
+  signInWithEmailAndPassword,
+  signOut,
+  updateEmail,
+  updatePassword,
+} from 'firebase/auth';
 import { collection, deleteDoc, doc, getDoc, getDocs, getFirestore, onSnapshot, query, setDoc, where, writeBatch } from 'firebase/firestore';
 import { deleteObject, getDownloadURL, getStorage, ref, uploadBytes } from 'firebase/storage';
 
@@ -195,6 +205,58 @@ export function listenToAuthChanges(callback) {
 
 export function signOutCurrentUser() {
   return signOut(auth);
+}
+
+export async function sendResetPasswordEmail(email) {
+  const normalizedEmail = String(email || '').trim().toLowerCase();
+  if (!normalizedEmail) {
+    throw new Error('Enter your email address first.');
+  }
+
+  await sendPasswordResetEmail(auth, normalizedEmail);
+}
+
+export async function updateCurrentUserCredentials({ currentPassword = '', newEmail = '', newPassword = '' } = {}) {
+  const user = auth.currentUser;
+  if (!user) {
+    throw new Error('You need to be signed in to update profile settings.');
+  }
+
+  const normalizedNewEmail = String(newEmail || '').trim().toLowerCase();
+  const normalizedNewPassword = String(newPassword || '').trim();
+  const normalizedCurrentPassword = String(currentPassword || '').trim();
+  const hasEmailChange = Boolean(normalizedNewEmail) && normalizedNewEmail !== String(user.email || '').trim().toLowerCase();
+  const hasPasswordChange = Boolean(normalizedNewPassword);
+
+  if (!hasEmailChange && !hasPasswordChange) {
+    throw new Error('Nothing to update. Enter a new email or password.');
+  }
+
+  if (normalizedCurrentPassword && user.email) {
+    const credential = EmailAuthProvider.credential(String(user.email).trim(), normalizedCurrentPassword);
+    await reauthenticateWithCredential(user, credential);
+  }
+
+  if (hasEmailChange) {
+    await updateEmail(user, normalizedNewEmail);
+    await setDoc(doc(db, USERS_COLLECTION, user.uid), {
+      email: normalizedNewEmail,
+      updatedAt: new Date().toISOString(),
+    }, { merge: true });
+  }
+
+  if (hasPasswordChange) {
+    if (normalizedNewPassword.length < 6) {
+      throw new Error('Password must be at least 6 characters long.');
+    }
+    await updatePassword(user, normalizedNewPassword);
+  }
+
+  return {
+    emailUpdated: hasEmailChange,
+    passwordUpdated: hasPasswordChange,
+    email: hasEmailChange ? normalizedNewEmail : String(user.email || '').trim(),
+  };
 }
 
 export async function fetchUserAccessProfiles() {

@@ -1,5 +1,6 @@
 # Python
 .venv/
+.venv_work/
 venv*/
 venv_schoolapp/
 __pycache__/

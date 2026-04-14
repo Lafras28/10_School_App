@@ -5,6 +5,7 @@ import { HelloWave } from '@/components/hello-wave';
 import ParallaxScrollView from '@/components/parallax-scroll-view';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
+import { Card } from '@/components/ui/card';
 import { Link } from 'expo-router';
 
 export default function HomeScreen() {
@@ -21,7 +22,7 @@ export default function HomeScreen() {
         <ThemedText type="title">Welcome!</ThemedText>
         <HelloWave />
       </ThemedView>
-      <ThemedView style={styles.stepContainer}>
+      <Card>
         <ThemedText type="subtitle">Step 1: Try it</ThemedText>
         <ThemedText>
           Edit <ThemedText type="defaultSemiBold">app/(tabs)/index.tsx</ThemedText> to see changes.
@@ -35,8 +36,8 @@ export default function HomeScreen() {
           </ThemedText>{' '}
           to open developer tools.
         </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
+      </Card>
+      <Card>
         <Link href="/modal">
           <Link.Trigger>
             <ThemedText type="subtitle">Step 2: Explore</ThemedText>
@@ -59,12 +60,11 @@ export default function HomeScreen() {
             </Link.Menu>
           </Link.Menu>
         </Link>
-
         <ThemedText>
           {`Tap the Explore tab to learn more about what's included in this starter app.`}
         </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
+      </Card>
+      <Card>
         <ThemedText type="subtitle">Step 3: Get a fresh start</ThemedText>
         <ThemedText>
           {`When you're ready, run `}
@@ -73,7 +73,7 @@ export default function HomeScreen() {
           <ThemedText type="defaultSemiBold">app</ThemedText> to{' '}
           <ThemedText type="defaultSemiBold">app-example</ThemedText>.
         </ThemedText>
-      </ThemedView>
+      </Card>
     </ParallaxScrollView>
   );
 }

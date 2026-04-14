@@ -6,6 +6,7 @@ import { ExternalLink } from '@/components/external-link';
 import ParallaxScrollView from '@/components/parallax-scroll-view';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
+import { Card } from '@/components/ui/card';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { Fonts } from '@/constants/theme';
 
@@ -30,8 +31,10 @@ export default function TabTwoScreen() {
           Explore
         </ThemedText>
       </ThemedView>
-      <ThemedText>This app includes example code to help you get started.</ThemedText>
-      <Collapsible title="File-based routing">
+      <Card>
+        <ThemedText>This app includes example code to help you get started.</ThemedText>
+      </Card>
+      <Collapsible title="File-based routing" useCard>
         <ThemedText>
           This app has two screens:{' '}
           <ThemedText type="defaultSemiBold">app/(tabs)/index.tsx</ThemedText> and{' '}
@@ -45,13 +48,13 @@ export default function TabTwoScreen() {
           <ThemedText type="link">Learn more</ThemedText>
         </ExternalLink>
       </Collapsible>
-      <Collapsible title="Android, iOS, and web support">
+      <Collapsible title="Android, iOS, and web support" useCard>
         <ThemedText>
           You can open this project on Android, iOS, and the web. To open the web version, press{' '}
           <ThemedText type="defaultSemiBold">w</ThemedText> in the terminal running this project.
         </ThemedText>
       </Collapsible>
-      <Collapsible title="Images">
+      <Collapsible title="Images" useCard>
         <ThemedText>
           For static images, you can use the <ThemedText type="defaultSemiBold">@2x</ThemedText> and{' '}
           <ThemedText type="defaultSemiBold">@3x</ThemedText> suffixes to provide files for
@@ -65,7 +68,7 @@ export default function TabTwoScreen() {
           <ThemedText type="link">Learn more</ThemedText>
         </ExternalLink>
       </Collapsible>
-      <Collapsible title="Light and dark mode components">
+      <Collapsible title="Light and dark mode components" useCard>
         <ThemedText>
           This template has light and dark mode support. The{' '}
           <ThemedText type="defaultSemiBold">useColorScheme()</ThemedText> hook lets you inspect
@@ -75,7 +78,7 @@ export default function TabTwoScreen() {
           <ThemedText type="link">Learn more</ThemedText>
         </ExternalLink>
       </Collapsible>
-      <Collapsible title="Animations">
+      <Collapsible title="Animations" useCard>
         <ThemedText>
           This template includes an example of an animated component. The{' '}
           <ThemedText type="defaultSemiBold">components/HelloWave.tsx</ThemedText> component uses
