@@ -1023,7 +1023,7 @@ export default function App() {
         >
         <Stack.Screen
           name="Home"
-          options={{ title: 'Greenhill' }}
+          options={{ title: 'School Safety', headerBackVisible: false, headerLeft: () => null }}
         >
           {(props) => <HomeScreen {...props} onLogout={handleLogout} loginIdentity={loginIdentity} />}
         </Stack.Screen>
@@ -1062,7 +1062,9 @@ export default function App() {
           <Stack.Screen
             name="StudentClassFolder"
             component={StudentClassFolderScreen}
-            options={({ route }) => ({ title: route.params?.className || 'Class Folder' })}
+            options={({ route }) => ({
+              title: route.params?.className || 'Class Folder',
+            })}
           />
           <Stack.Screen
             name="ComplianceReports"
@@ -1077,7 +1079,9 @@ export default function App() {
           <Stack.Screen
             name="ComplianceDocumentFolder"
             component={ComplianceDocumentFolderScreen}
-            options={({ route }) => ({ title: route.params?.folder?.label || 'Documents' })}}
+            options={({ route }) => ({
+              title: route.params?.folder?.label || 'Documents',
+            })}
           />
           <Stack.Screen
             name="Activities"
@@ -4896,8 +4900,10 @@ function ComplianceDocumentFolderScreen({ navigation, route }) {
 function ComplianceReportsScreen({ navigation }) {
   const accessProfile = useAccessProfile();
   const canExportReports = hasPermission(accessProfile, 'canExportReports');
-  const [schoolName, setSchoolName] = useState(DEFAULT_SCHOOL_NAME);
+  const [schoolName, setSchoolName] = useState(accessProfile?.schoolName || DEFAULT_SCHOOL_NAME);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [selectedClasses, setSelectedClasses] = useState(['All Classes']);
+  const [allAvailableClasses, setAllAvailableClasses] = useState(CLASSROOM_OPTIONS);
 
   const currentYear = parseInt(TODAY.split('-')[0], 10);
   const currentMonth = parseInt(TODAY.split('-')[1], 10);
@@ -4916,9 +4922,48 @@ function ComplianceReportsScreen({ navigation }) {
   useEffect(() => {
     if (!canExportReports) {
       Alert.alert('Access Restricted', 'Your account does not have permission to open Reports.');
-      navigation.goBack();
+      navigation.navigate('Home');
     }
   }, [canExportReports, navigation]);
+
+  useEffect(() => {
+    let isMounted = true;
+    const loadClasses = async () => {
+      try {
+        const studentData = await loadStudentsFromDataStore();
+        if (!isMounted) return;
+        const discovered = (Array.isArray(studentData) ? studentData : [])
+          .map((student) => getClassroomName(student))
+          .filter(Boolean);
+        const uniqueClasses = Array.from(new Set(discovered));
+        setAllAvailableClasses(Array.from(new Set(['All Classes', ...uniqueClasses])));
+      } catch (_error) {
+        if (isMounted) {
+          setAllAvailableClasses(CLASSROOM_OPTIONS);
+        }
+      }
+    };
+    loadClasses();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  const handleToggleClass = (className) => {
+    if (className === 'All Classes') {
+      setSelectedClasses(['All Classes']);
+      return;
+    }
+
+    const isCurrentlySelected = selectedClasses.includes(className);
+    const otherClasses = selectedClasses.filter((cls) => cls !== 'All Classes' && cls !== className);
+
+    if (isCurrentlySelected) {
+      setSelectedClasses(otherClasses.length > 0 ? otherClasses : ['All Classes']);
+    } else {
+      setSelectedClasses([...otherClasses, className]);
+    }
+  };
 
   const startDate = `${startYear}-${startMonth}-${startDay}`;
   const endDate = `${endYear}-${endMonth}-${endDay}`;
@@ -5153,262 +5198,7 @@ function ComplianceReportsScreen({ navigation }) {
             );
           })}
         </View>
-        <Text style={styles.tapHint}>Select "All Classes" or specific classes to include in the export.</Text>
-
-        <View style={styles.compactDateRangeContainer}>
-          <View style={styles.compactDateFieldWrapper}>
-            <Text style={styles.compactDateLabel}>Start Date</Text>
-            <TouchableOpacity
-              style={styles.compactDateField}
-              onPress={() => setShowStartPicker(true)}
-            >
-              <Text style={styles.compactDateFieldText}>{formatCompactDateDisplay(startYear, startMonth, startDay)}</Text>
-            </TouchableOpacity>
-          </View>
-
-          <View style={styles.compactDateFieldWrapper}>
-            <Text style={styles.compactDateLabel}>End Date</Text>
-            <TouchableOpacity
-              style={styles.compactDateField}
-              onPress={() => setShowEndPicker(true)}
-            >
-              <Text style={styles.compactDateFieldText}>{formatCompactDateDisplay(endYear, endMonth, endDay)}</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-
-        <TouchableOpacity style={[styles.reportButton, isGenerating && { opacity: 0.6 }]} onPress={handleExport} disabled={isGenerating}>
-          <Text style={styles.saveStudentButtonText}>{isGenerating ? 'Generating PDF...' : 'Open PDF Export'}</Text>
-        </TouchableOpacity>
-
-        <CompactDatePickerModal
-          visible={showStartPicker}
-          onClose={() => setShowStartPicker(false)}
-          onDateSelect={(_, m, d) => {
-            setStartMonth(m);
-            setStartDay(d);
-          }}
-          currentYear={currentYear}
-          currentMonth={startMonth}
-          currentDay={startDay}
-        />
-
-        <CompactDatePickerModal
-          visible={showEndPicker}
-          onClose={() => setShowEndPicker(false)}
-          onDateSelect={(_, m, d) => {
-            setEndMonth(m);
-            setEndDay(d);
-          }}
-          currentYear={currentYear}
-          currentMonth={endMonth}
-          currentDay={endDay}
-        />
-      </ScrollView>
-    </SafeAreaView>
-  );
-
-  const startDate = `${startYear}-${startMonth}-${startDay}`;
-  const endDate = `${endYear}-${endMonth}-${endDay}`;
-
-  const handleExport = async () => {
-    if (startDate > endDate) {
-      Alert.alert('Date Range Error', 'Start date must be before or equal to end date.');
-      return;
-    }
-
-    setIsGenerating(true);
-    try {
-      const escapeHtml = (value) => String(value || '')
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#039;');
-
-      // Fetch all data from Firestore
-      const students = await fetchStudentsFromFirestore();
-      const attendance = await fetchAllAttendanceFromFirestore();
-      const incidents = await fetchIncidentsFromFirestore();
-      const medicine = await fetchMedicineLogsFromFirestore();
-
-      // Filter data by date range
-      const filteredAttendance = (attendance || []).filter((entry) => {
-        const entryDate = entry?.date || '';
-        return entryDate >= startDate && entryDate <= endDate;
-      });
-
-      const filteredIncidents = (incidents || []).filter((incident) => {
-        const incidentDate = (incident?.timestamp || '').split('T')[0];
-        return incidentDate >= startDate && incidentDate <= endDate;
-      });
-
-      const filteredMedicine = (medicine || []).filter((entry) => {
-        const medDate = (entry?.timeAdministered || '').split('T')[0];
-        return medDate >= startDate && medDate <= endDate;
-      });
-
-      // Build attendance table rows
-      const absentLateAttendance = filteredAttendance.filter((e) => e?.status && ['Absent', 'Late'].includes(e.status));
-      const attendanceRows = absentLateAttendance
-        .map((entry) => `<tr><td>${escapeHtml(entry.date || '-')}</td><td>${escapeHtml(entry.studentName || 'Unknown')}</td><td>${escapeHtml(entry.status || '')}</td><td>${escapeHtml(entry.reason || '')}</td></tr>`)
-        .join('');
-
-      // Build incident table rows
-      const incidentRows = filteredIncidents
-        .map((incident) => {
-          const incidentTime = incident?.timestamp ? new Date(incident.timestamp).toLocaleString() : '-';
-          return `<tr><td>${escapeHtml(incidentTime)}</td><td>${escapeHtml(incident.location || '-')}</td><td>${escapeHtml(incident.studentName || 'General')}</td><td>${escapeHtml(incident.description || '-')}</td><td>${escapeHtml(incident.actionTaken || '-')}</td></tr>`;
-        })
-        .join('');
-
-      // Build medicine table rows
-      const medicineRows = filteredMedicine
-        .map((entry) => {
-          const medTime = entry?.timeAdministered ? new Date(entry.timeAdministered).toLocaleString() : '-';
-          return `<tr><td>${escapeHtml(medTime)}</td><td>${escapeHtml(entry.studentName || 'Unknown')}</td><td>${escapeHtml(entry.medicationName || '-')}</td><td>${escapeHtml(entry.dosage || '-')}</td><td>${escapeHtml(entry.staffMember || '-')}</td><td>${entry.allergyWarning ? 'YES' : 'No'}</td></tr>`;
-        })
-        .join('');
-
-      const html = `
-        <!DOCTYPE html>
-        <html>
-          <head>
-            <meta charset="UTF-8" />
-            <style>
-              @page {
-                margin: 72px 72px 72px 72px;
-              }
-              * { margin: 0; padding: 0; box-sizing: border-box; }
-              body { 
-                font-family: Helvetica, Arial, sans-serif; 
-                padding: 48px 48px;
-                line-height: 1.4;
-              }
-              h1 { 
-                color: #102A43; 
-                font-size: 24px; 
-                margin: 0 0 16px 0;
-                padding: 0;
-              }
-              .header-info {
-                margin: 0 0 24px 0;
-              }
-              .header-info p { 
-                margin: 6px 0; 
-                color: #333; 
-                font-size: 12px;
-              }
-              .section {
-                page-break-before: always;
-                margin: 0;
-                padding: 24px 0 0 0;
-              }
-              .section:first-of-type {
-                page-break-before: avoid;
-                padding: 0;
-              }
-              h2 { 
-                color: #102A43; 
-                font-size: 16px; 
-                margin: 0 0 16px 0;
-                padding: 0;
-                font-weight: bold;
-              }
-              p { 
-                margin: 0; 
-                color: #333; 
-                font-size: 12px;
-                padding: 12px 0;
-              }
-              table { 
-                width: 100%; 
-                border-collapse: collapse; 
-                margin: 12px 0 0 0; 
-                font-size: 11px;
-              }
-              th { 
-                background: #102A43; 
-                color: white; 
-                padding: 10px 8px; 
-                text-align: left; 
-                font-weight: bold;
-                border: 1px solid #333;
-              }
-              td { 
-                padding: 8px; 
-                border: 1px solid #E0E0E0;
-              }
-              tr:nth-child(even) { 
-                background: #F8FAFC; 
-              }
-              tr:nth-child(odd) {
-                background: #FFFFFF;
-              }
-            </style>
-          </head>
-          <body>
-            <div class="header-info">
-              <h1>School Safety & Compliance Report</h1>
-              <p><strong>School:</strong> ${escapeHtml(schoolName.trim() || DEFAULT_SCHOOL_NAME)}</p>
-              <p><strong>Date Range:</strong> ${escapeHtml(startDate)} to ${escapeHtml(endDate)}</p>
-              <p><strong>Generated:</strong> ${escapeHtml(new Date().toLocaleString())}</p>
-            </div>
-
-            <div class="section">
-              <h2>Attendance Register (Absent and Late only)</h2>
-              ${attendanceRows ? `<table><thead><tr><th>Date</th><th>Learner</th><th>Status</th><th>Reason</th></tr></thead><tbody>${attendanceRows}</tbody></table>` : '<p>No absences or late arrivals recorded.</p>'}
-            </div>
-
-            <div class="section">
-              <h2>Incident / Accident Register</h2>
-              ${incidentRows ? `<table><thead><tr><th>Date/Time</th><th>Location</th><th>Learner</th><th>Description</th><th>Action Taken</th></tr></thead><tbody>${incidentRows}</tbody></table>` : '<p>No incidents recorded.</p>'}
-            </div>
-
-            <div class="section">
-              <h2>Medicine Administration Log</h2>
-              ${medicineRows ? `<table><thead><tr><th>Date/Time</th><th>Learner</th><th>Medication</th><th>Dosage</th><th>Staff Member</th><th>Allergy Warning</th></tr></thead><tbody>${medicineRows}</tbody></table>` : '<p>No medicine logs recorded.</p>'}
-            </div>
-          </body>
-        </html>
-      `;
-
-      const file = await Print.printToFileAsync({ html });
-      const canShare = await Sharing.isAvailableAsync();
-
-      if (canShare) {
-        await Sharing.shareAsync(file.uri, {
-          mimeType: 'application/pdf',
-          dialogTitle: 'Export Compliance Report',
-          UTI: 'com.adobe.pdf',
-        });
-      } else {
-        await Linking.openURL(file.uri);
-      }
-    } catch (error) {
-      Alert.alert('Export Failed', error.message || 'Could not generate compliance report.');
-    } finally {
-      setIsGenerating(false);
-    }
-  };
-
-  return (
-    <SafeAreaView style={styles.container}>
-      <ScrollView contentContainerStyle={styles.formContainer}>
-        <Text style={styles.title}>Compliance Report Export</Text>
-        <Text style={styles.subtitle}>Generate a professional PDF layout for audits and recordkeeping</Text>
-
-        <View style={styles.infoBox}>
-          <Text style={styles.infoText}>The PDF includes School Name, Date Range, attendance (Late/Absent only), incidents, and medicine logs.</Text>
-        </View>
-
-        <TextInput
-          style={styles.formInput}
-          placeholder="School Name"
-          placeholderTextColor={FORM_PLACEHOLDER_COLOR}
-          value={schoolName}
-          onChangeText={setSchoolName}
-        />
+        <Text style={styles.tapHint}>Select &quot;All Classes&quot; or specific classes to include in the export.</Text>
 
         <View style={styles.compactDateRangeContainer}>
           <View style={styles.compactDateFieldWrapper}>

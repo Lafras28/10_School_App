@@ -610,11 +610,11 @@ const styles = StyleSheet.create({
   },
   statusDot: {
     position: 'absolute',
-    top: 14,
-    right: 14,
-    width: 12,
-    height: 12,
-    borderRadius: 6,
+    top: 12,
+    right: 12,
+    width: 24,
+    height: 24,
+    borderRadius: 12,
   },
   actionRow: {
     flexDirection: 'row',
