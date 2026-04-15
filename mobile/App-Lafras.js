@@ -7,6 +7,7 @@ import {
   Platform,
   SafeAreaView,
   ScrollView,
+  StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
@@ -21,7 +22,6 @@ import { NavigationContainer, useFocusEffect } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import {
   DEFAULT_ROLE_PERMISSIONS,
-  createManagedUserAccount,
   deleteActivityFromFirestore,
   deleteComplianceDocument,
   fetchAllAttendanceFromFirestore,
@@ -46,14 +46,8 @@ import {
   seedStudentsToFirestore,
   signInUser,
   signOutCurrentUser,
-  sendResetPasswordEmail,
-  getCurrentSchoolConfig,
-  updateCurrentUserCredentials,
-  updateCurrentSchoolFeatures,
-  updateCurrentSchoolMedicalVaultPassword,
   updateUserAccessProfile,
 } from './firebaseConfig';
-import styles from './styles/appStyles';
 
 function resolveApiBaseUrl() {
   const configuredUrl = String(
@@ -85,7 +79,7 @@ const API_BASE_URL = resolveApiBaseUrl();
 const Stack = createNativeStackNavigator();
 const FORM_PLACEHOLDER_COLOR = '#334E68';
 const TODAY = new Date().toISOString().split('T')[0];
-const DEFAULT_SCHOOL_NAME = 'Greenhill';
+const DEFAULT_SCHOOL_NAME = 'Bana Pele Preschool';
 const PARENT_ABSENT_REASON = 'Parent marked absent in app';
 const CLASSROOM_OPTIONS = ['All Classes', 'Sunshine Bunnies', 'Rainbow Cubs', 'Little Explorers'];
 const ROLE_OPTIONS = ['principal', 'teacher', 'viewer', 'parent'];
@@ -112,14 +106,6 @@ const AccessContext = createContext({
   uid: '',
   email: '',
   displayName: 'Staff Member',
-  schoolId: 'greenhill',
-  schoolFeatures: {
-    students: true,
-    activities: false,
-    staffAccess: true,
-    compliance: false,
-    pdfExport: true,
-  },
   role: 'teacher',
   permissions: DEFAULT_ROLE_PERMISSIONS.teacher,
   linkedStudentIds: [],
@@ -133,15 +119,6 @@ function hasPermission(accessProfile, permission) {
   return Boolean(accessProfile?.permissions?.[permission]);
 }
 
-function isSchoolFeatureEnabled(accessProfile, featureKey) {
-  const features = accessProfile?.schoolFeatures;
-  if (!features || typeof features !== 'object') {
-    return true;
-  }
-
-  return features[featureKey] !== false;
-}
-
 function isParentRole(accessProfile) {
   return String(accessProfile?.role || '').trim().toLowerCase() === 'parent';
 }
@@ -153,55 +130,65 @@ function formatCompactDateDisplay(year, month, day) {
 }
 
 function CompactDatePickerModal({ visible, onClose, onDateSelect, currentYear: cy, currentMonth: cm, currentDay: cd }) {
+  const [tempYear, setTempYear] = useState(cy);
   const [tempMonth, setTempMonth] = useState(cm);
   const [tempDay, setTempDay] = useState(cd);
+  const yearOptions = Array.from({ length: 11 }, (_, i) => String(cy - 5 + i));
   const monthOptions = Array.from({ length: 12 }, (_, i) => String(i + 1).padStart(2, '0'));
   const dayOptions = Array.from({ length: 31 }, (_, i) => String(i + 1).padStart(2, '0'));
 
   useEffect(() => {
+    setTempYear(cy);
     setTempMonth(cm);
     setTempDay(cd);
   }, [cy, cm, cd, visible]);
 
   const handleConfirm = () => {
-    onDateSelect(String(cy), tempMonth, tempDay);
+    onDateSelect(tempYear, tempMonth, tempDay);
     onClose();
   };
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <View style={styles.datePickerModalRoot}>
-        <TouchableOpacity style={styles.datePickerBackdrop} activeOpacity={1} onPress={onClose} />
-        <View style={styles.datePickerModalCenter} pointerEvents="box-none">
-          <View style={styles.datePickerModalCard}>
-            <Text style={styles.datePickerModalTitle}>Select Date</Text>
+      <TouchableWithoutFeedback onPress={onClose}>
+        <View style={styles.datePickerBackdrop}>
+          <TouchableWithoutFeedback onPress={() => {}}>
+            <View style={styles.datePickerModalCard}>
+              <Text style={styles.datePickerModalTitle}>Select Date</Text>
 
-            <View style={styles.compactDatePickerRow}>
-              <CompactDatePickerColumn
-                items={monthOptions}
-                selectedValue={tempMonth}
-                onSelect={setTempMonth}
-                label="Month"
-              />
-              <CompactDatePickerColumn
-                items={dayOptions}
-                selectedValue={tempDay}
-                onSelect={setTempDay}
-                label="Day"
-              />
-            </View>
+              <View style={styles.compactDatePickerRow}>
+                <CompactDatePickerColumn
+                  items={monthOptions}
+                  selectedValue={tempMonth}
+                  onSelect={setTempMonth}
+                  label="Month"
+                />
+                <CompactDatePickerColumn
+                  items={dayOptions}
+                  selectedValue={tempDay}
+                  onSelect={setTempDay}
+                  label="Day"
+                />
+                <CompactDatePickerColumn
+                  items={yearOptions}
+                  selectedValue={tempYear}
+                  onSelect={setTempYear}
+                  label="Year"
+                />
+              </View>
 
-            <View style={styles.datePickerModalButtonRow}>
-              <TouchableOpacity style={styles.datePickerModalCancelBtn} onPress={onClose}>
-                <Text style={styles.datePickerModalCancelText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.datePickerModalConfirmBtn} onPress={handleConfirm}>
-                <Text style={styles.datePickerModalConfirmText}>OK</Text>
-              </TouchableOpacity>
+              <View style={styles.datePickerModalButtonRow}>
+                <TouchableOpacity style={styles.datePickerModalCancelBtn} onPress={onClose}>
+                  <Text style={styles.datePickerModalCancelText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.datePickerModalConfirmBtn} onPress={handleConfirm}>
+                  <Text style={styles.datePickerModalConfirmText}>OK</Text>
+                </TouchableOpacity>
+              </View>
             </View>
-          </View>
+          </TouchableWithoutFeedback>
         </View>
-      </View>
+      </TouchableWithoutFeedback>
     </Modal>
   );
 }
@@ -285,29 +272,6 @@ function formatDateTime(value) {
   }
 
   return parsedDate.toLocaleString();
-}
-
-function formatPhoneForDisplay(value) {
-  const rawValue = String(value || '').trim();
-  if (!rawValue) {
-    return 'No number saved';
-  }
-
-  const digitsOnly = rawValue.replace(/\D+/g, '');
-  if (!digitsOnly) {
-    return rawValue;
-  }
-
-  let normalized = digitsOnly;
-  if (normalized.startsWith('27') && normalized.length === 11) {
-    normalized = `0${normalized.slice(2)}`;
-  }
-
-  if (normalized.length === 10 && normalized.startsWith('0')) {
-    return `${normalized.slice(0, 3)} ${normalized.slice(3, 6)} ${normalized.slice(6)}`;
-  }
-
-  return rawValue;
 }
 
 function doesMedicationTriggerAllergy(medicationName, allergies) {
@@ -598,9 +562,6 @@ function LoginScreen({ onLogin, isBusy }) {
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
-  const [forgotBusy, setForgotBusy] = useState(false);
-  const [forgotMessage, setForgotMessage] = useState('');
-  const [forgotError, setForgotError] = useState('');
 
   const handleLogin = async () => {
     if (!identifier.trim() || !password.trim()) {
@@ -616,42 +577,10 @@ function LoginScreen({ onLogin, isBusy }) {
     }
   };
 
-  const handleForgotPassword = async () => {
-    const email = String(identifier || '').trim().toLowerCase();
-    if (!email) {
-      setForgotError('Enter your email address first.');
-      setForgotMessage('');
-      Alert.alert('Email Required', 'Enter your email address first, then tap Forgot password.');
-      return;
-    }
-
-    try {
-      setForgotBusy(true);
-      setForgotError('');
-      setForgotMessage('Sending reset link...');
-      await sendResetPasswordEmail(email);
-      setForgotMessage('If this email is registered, a reset link has been sent. Check inbox and spam folder.');
-      Alert.alert('Reset Email Sent', 'Check your inbox for the password reset link.');
-    } catch (error) {
-      const code = String(error?.code || '').trim();
-      if (code === 'auth/invalid-email') {
-        setForgotError('Please enter a valid email address.');
-        setForgotMessage('');
-        Alert.alert('Invalid Email', 'Please enter a valid email address.');
-        return;
-      }
-      setForgotError(error.message || 'Could not send password reset email.');
-      setForgotMessage('');
-      Alert.alert('Could Not Send', error.message || 'Could not send password reset email.');
-    } finally {
-      setForgotBusy(false);
-    }
-  };
-
   return (
     <SafeAreaView style={styles.loginScreenContainer}>
       <View style={styles.loginCard}>
-        <Text style={styles.loginTitle}>Greenhill Login</Text>
+        <Text style={styles.loginTitle}>School Safety Login</Text>
         <Text style={styles.loginSubtitle}>Sign in with your staff email and password. Your role controls what you can edit.</Text>
 
         <TextInput
@@ -677,17 +606,10 @@ function LoginScreen({ onLogin, isBusy }) {
         <TouchableOpacity
           style={[styles.loginButton, isBusy && styles.saveStudentButtonDisabled]}
           onPress={handleLogin}
-          disabled={isBusy || forgotBusy}
+          disabled={isBusy}
         >
           <Text style={styles.saveStudentButtonText}>{isBusy ? 'Signing In...' : 'Log In'}</Text>
         </TouchableOpacity>
-
-        <TouchableOpacity style={styles.loginForgotButton} onPress={handleForgotPassword} disabled={isBusy || forgotBusy}>
-          <Text style={styles.loginForgotText}>{forgotBusy ? 'Sending reset link...' : 'Forgot password?'}</Text>
-        </TouchableOpacity>
-
-        {forgotMessage ? <Text style={styles.loginInfoText}>{forgotMessage}</Text> : null}
-        {forgotError ? <Text style={styles.loginErrorText}>{forgotError}</Text> : null}
 
         {errorMessage ? <Text style={styles.errorText}>{errorMessage}</Text> : null}
         <Text style={styles.loginHint}>Use Firebase Auth accounts. Principal/admin emails can be given edit access, while teachers can stay view-only.</Text>
@@ -774,7 +696,7 @@ function StudentAutocomplete({
       {showSuggestions && query.trim() ? (
         <View style={styles.autocompleteResults}>
           {suggestions.length > 0 ? (
-            <ScrollView nestedScrollEnabled style={styles.autocompleteScrollArea} keyboardShouldPersistTaps="handled">
+            <ScrollView nestedScrollEnabled style={styles.autocompleteScrollArea}>
               {suggestions.map((student) => (
                 <TouchableOpacity
                   key={student.id}
@@ -782,7 +704,7 @@ function StudentAutocomplete({
                   onPress={() => handleSelect(student)}
                 >
                   <Text style={styles.autocompleteName}>{getStudentFullName(student)}</Text>
-                  <Text style={styles.autocompleteMeta}>{getClassroomName(student)}</Text>
+                  <Text style={styles.autocompleteMeta}>{student.id} • {getClassroomName(student)}</Text>
                 </TouchableOpacity>
               ))}
             </ScrollView>
@@ -794,7 +716,7 @@ function StudentAutocomplete({
 
       <Text style={styles.selectedLearnerText}>
         {selectedStudent
-          ? `Selected learner: ${getStudentFullName(selectedStudent)} • ${getClassroomName(selectedStudent)}`
+          ? `Selected learner: ${getStudentFullName(selectedStudent)} (${selectedStudent.id}) • ${getClassroomName(selectedStudent)}`
           : helperText}
       </Text>
     </View>
@@ -890,7 +812,7 @@ function LinkedStudentPicker({
                   >
                     <Text style={styles.autocompleteName}>{getStudentFullName(student)}</Text>
                     <Text style={styles.autocompleteMeta}>
-                      {getClassroomName(student)}{isLinked ? ' • linked' : ''}
+                      {student.id} • {getClassroomName(student)}{isLinked ? ' • linked' : ''}
                     </Text>
                   </TouchableOpacity>
                 );
@@ -934,14 +856,6 @@ export default function App() {
     uid: '',
     email: '',
     displayName: 'Staff Member',
-    schoolId: 'greenhill',
-    schoolFeatures: {
-      students: true,
-      activities: false,
-      staffAccess: true,
-      compliance: false,
-      pdfExport: true,
-    },
     role: 'teacher',
     permissions: DEFAULT_ROLE_PERMISSIONS.teacher,
     linkedStudentIds: [],
@@ -954,14 +868,6 @@ export default function App() {
         uid: '',
         email: '',
         displayName: 'Staff Member',
-        schoolId: 'greenhill',
-        schoolFeatures: {
-          students: true,
-          activities: false,
-          staffAccess: true,
-          compliance: false,
-          pdfExport: true,
-        },
         role: 'teacher',
         permissions: DEFAULT_ROLE_PERMISSIONS.teacher,
         linkedStudentIds: [],
@@ -998,7 +904,7 @@ export default function App() {
       <SafeAreaView style={styles.loginScreenContainer}>
         <View style={styles.loginCard}>
           <Text style={styles.loginTitle}>Loading access...</Text>
-          <Text style={styles.loginSubtitle}>Checking your sign-in details.</Text>
+          <Text style={styles.loginSubtitle}>Checking your Firebase sign-in and role permissions.</Text>
         </View>
       </SafeAreaView>
     );
@@ -1023,20 +929,10 @@ export default function App() {
         >
           <Stack.Screen
             name="Home"
-            options={{ title: 'Greenhill' }}
+            options={{ title: 'School Safety Modules' }}
           >
             {(props) => <HomeScreen {...props} onLogout={handleLogout} loginIdentity={loginIdentity} />}
           </Stack.Screen>
-          <Stack.Screen
-            name="ProfileSettings"
-            component={ProfileSettingsScreen}
-            options={{ title: 'Profile & Settings' }}
-          />
-          <Stack.Screen
-            name="SchoolSettings"
-            component={SchoolSettingsScreen}
-            options={{ title: 'School Settings' }}
-          />
           <Stack.Screen
             name="ManageUsers"
             component={ManageUsersScreen}
@@ -1103,418 +999,91 @@ export default function App() {
 function HomeScreen({ navigation, onLogout, loginIdentity }) {
   const accessProfile = useAccessProfile();
   const roleLabel = formatRoleLabel(accessProfile.role);
-  const isPrincipal = String(accessProfile?.role || '').trim().toLowerCase() === 'principal';
   const isParentAccount = isParentRole(accessProfile);
-  const studentsEnabled = isSchoolFeatureEnabled(accessProfile, 'students');
-  const activitiesEnabled = isSchoolFeatureEnabled(accessProfile, 'activities');
-  const staffAccessEnabled = isSchoolFeatureEnabled(accessProfile, 'staffAccess');
-  const complianceEnabled = isSchoolFeatureEnabled(accessProfile, 'compliance');
-  const pdfExportEnabled = isSchoolFeatureEnabled(accessProfile, 'pdfExport');
+  const canEditStudents = hasPermission(accessProfile, 'canEditStudents');
   const canManageUsers = hasPermission(accessProfile, 'canManageUsers');
   const canExportReports = hasPermission(accessProfile, 'canExportReports');
-  const canOpenActivities = hasPermission(accessProfile, 'canTakeAttendance')
-    || hasPermission(accessProfile, 'canLogIncidents')
-    || hasPermission(accessProfile, 'canLogMedicine')
-    || canExportReports;
-  const canOpenCompliance = canExportReports || hasPermission(accessProfile, 'canManageUsers');
-  const [isMenuVisible, setIsMenuVisible] = useState(false);
-
-  const closeMenu = () => {
-    setIsMenuVisible(false);
-  };
-
-  const handleOpenSettings = () => {
-    closeMenu();
-    navigation.navigate('ProfileSettings');
-  };
-
-  const handleLogoutFromMenu = () => {
-    closeMenu();
-    onLogout();
-  };
 
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={styles.formContainer}>
         <View style={styles.homeHeaderRow}>
           <View style={styles.homeHeaderTextWrap}>
-            <Text style={styles.title}>Greenhill</Text>
+            <Text style={styles.title}>School Safety</Text>
+            <Text style={styles.subtitle}>Bana Pele daily compliance tools</Text>
           </View>
 
-          <TouchableOpacity style={styles.burgerButton} onPress={() => setIsMenuVisible(true)}>
-            <Text style={styles.burgerButtonText}>☰</Text>
+          <TouchableOpacity style={styles.logoutButton} onPress={onLogout}>
+            <Text style={styles.logoutButtonText}>Log out</Text>
           </TouchableOpacity>
         </View>
 
-        {studentsEnabled ? (
-          <TouchableOpacity
-            style={styles.moduleCard}
-            onPress={() => navigation.navigate('StudentDirectory')}
-          >
-            <Text style={styles.moduleTitle}>{isParentAccount ? 'My Child/Children' : 'Students'}</Text>
-          </TouchableOpacity>
-        ) : null}
+        <Text style={styles.helperText}>
+          {isParentAccount
+            ? `Logged in as ${loginIdentity || 'Parent'} • ${roleLabel} access. You can view your linked child records and update medical details.`
+            : `Logged in as ${loginIdentity || 'Staff Member'} • ${roleLabel} access. Student editing is ${canEditStudents ? 'enabled' : 'view-only'} for this account.`}
+        </Text>
 
-        {!isParentAccount && staffAccessEnabled && canManageUsers ? (
+        <View style={styles.infoBox}>
+          <Text style={styles.infoText}>
+            {isParentAccount
+              ? 'This parent account only shows the learner(s) linked to it. Attendance, incidents, and medicine history are read-only.'
+              : 'Access is tied to the signed-in Firebase user. You can change `role` or `permissions` later in Firestore under the `users` collection.'}
+          </Text>
+        </View>
+
+        <TouchableOpacity
+          style={styles.moduleCard}
+          onPress={() => navigation.navigate('StudentDirectory')}
+        >
+          <Text style={styles.moduleTitle}>{isParentAccount ? 'My Child/Children' : 'Students'}</Text>
+          <Text style={styles.moduleSubtitle}>
+            {isParentAccount
+              ? 'View your linked child profile, attendance history, medicine log, and incident history'
+              : 'Emergency profiles, contacts, and class-level quick actions for attendance, incidents, and medicine logs'}
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.moduleCard}
+          onPress={() => navigation.navigate('Activities')}
+        >
+          <Text style={styles.moduleTitle}>Activities</Text>
+          <Text style={styles.moduleSubtitle}>
+            {isParentAccount
+              ? 'View activities done in your child\'s class'
+              : 'Log daily classroom activities and export activity reports'}
+          </Text>
+        </TouchableOpacity>
+
+        {!isParentAccount && canManageUsers ? (
           <TouchableOpacity
             style={styles.moduleCard}
             onPress={() => navigation.navigate('ManageUsers')}
           >
             <Text style={styles.moduleTitle}>Staff Access</Text>
+            <Text style={styles.moduleSubtitle}>Principal-only user roles, permissions, and account access control</Text>
           </TouchableOpacity>
         ) : null}
 
-        {!isParentAccount && activitiesEnabled && canOpenActivities ? (
-          <TouchableOpacity
-            style={styles.moduleCard}
-            onPress={() => navigation.navigate('Activities')}
-          >
-            <Text style={styles.moduleTitle}>Activities</Text>
-          </TouchableOpacity>
-        ) : null}
-
-        {!isParentAccount && complianceEnabled && canOpenCompliance ? (
+        {!isParentAccount ? (
           <TouchableOpacity
             style={styles.moduleCard}
             onPress={() => navigation.navigate('ComplianceDocuments')}
           >
             <Text style={styles.moduleTitle}>Compliance</Text>
+            <Text style={styles.moduleSubtitle}>Evacuation plans, DSD registration, health & safety, and other required ECD compliance documents</Text>
           </TouchableOpacity>
         ) : null}
 
-        {!isParentAccount && pdfExportEnabled && canExportReports ? (
+        {!isParentAccount && canExportReports ? (
           <TouchableOpacity
             style={styles.moduleCard}
             onPress={() => navigation.navigate('ComplianceReports')}
           >
             <Text style={styles.moduleTitle}>PDF Export</Text>
+            <Text style={styles.moduleSubtitle}>Download a professional compliance report with school name and date range.</Text>
           </TouchableOpacity>
-        ) : null}
-
-        <Text style={styles.footerStatusText}>{`Logged in as ${loginIdentity || 'Staff Member'} - ${roleLabel} Access`}</Text>
-      </ScrollView>
-
-      <Modal
-        visible={isMenuVisible}
-        transparent
-        animationType="fade"
-        onRequestClose={closeMenu}
-      >
-        <View style={styles.menuModalRoot}>
-          <TouchableOpacity style={styles.menuBackdrop} activeOpacity={1} onPress={closeMenu} />
-          <View style={styles.menuSheetWrap} pointerEvents="box-none">
-            <View style={styles.menuSheetCard}>
-              <TouchableOpacity style={styles.menuItemButton} onPress={handleOpenSettings}>
-                <Text style={styles.menuItemText}>Profile & Settings</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.menuItemButton} onPress={handleLogoutFromMenu}>
-                <Text style={styles.menuItemText}>Log out</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
-    </SafeAreaView>
-  );
-}
-
-function ProfileSettingsScreen() {
-  const accessProfile = useAccessProfile();
-  const canManageUsers = hasPermission(accessProfile, 'canManageUsers');
-  const [currentPassword, setCurrentPassword] = useState('');
-  const [newEmail, setNewEmail] = useState('');
-  const [newPassword, setNewPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
-  const [medicalVaultPassword, setMedicalVaultPassword] = useState('');
-  const [initialMedicalVaultPassword, setInitialMedicalVaultPassword] = useState('');
-  const [isMedicalVaultPasswordVisible, setIsMedicalVaultPasswordVisible] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
-
-  useEffect(() => {
-    let isMounted = true;
-
-    const loadVaultPassword = async () => {
-      if (!canManageUsers) return;
-      try {
-        const config = await getCurrentSchoolConfig();
-        if (!isMounted) return;
-        const current = String(config?.medicalVaultPassword || '').trim();
-        setMedicalVaultPassword(current);
-        setInitialMedicalVaultPassword(current);
-      } catch (_error) {
-        // No-op: profile settings still usable without this field load.
-      }
-    };
-
-    loadVaultPassword();
-
-    return () => {
-      isMounted = false;
-    };
-  }, [canManageUsers]);
-
-  const handleSave = async () => {
-    const trimmedEmail = String(newEmail || '').trim();
-    const trimmedPassword = String(newPassword || '').trim();
-    const trimmedConfirm = String(confirmPassword || '').trim();
-    const trimmedVaultPassword = String(medicalVaultPassword || '').trim();
-    const vaultPasswordChanged = canManageUsers && trimmedVaultPassword !== String(initialMedicalVaultPassword || '').trim();
-    const hasCredentialChanges = Boolean(trimmedEmail || trimmedPassword);
-
-    if (!hasCredentialChanges && !vaultPasswordChanged) {
-      Alert.alert('No Changes', 'Update your profile settings or Medical Aid Vault password before saving.');
-      return;
-    }
-
-    if (hasCredentialChanges && trimmedPassword && trimmedPassword !== trimmedConfirm) {
-      Alert.alert('Password Mismatch', 'New password and confirm password must match.');
-      return;
-    }
-
-    try {
-      setIsSaving(true);
-      if (hasCredentialChanges) {
-        const result = await updateCurrentUserCredentials({
-          currentPassword,
-          newEmail: trimmedEmail,
-          newPassword: trimmedPassword,
-        });
-
-        setCurrentPassword('');
-        setNewPassword('');
-        setConfirmPassword('');
-        if (result?.emailUpdated) {
-          setNewEmail(result.email || '');
-        } else {
-          setNewEmail('');
-        }
-      }
-
-      if (vaultPasswordChanged) {
-        const nextSchoolConfig = await updateCurrentSchoolMedicalVaultPassword(trimmedVaultPassword, accessProfile?.uid || '');
-        const current = String(nextSchoolConfig?.medicalVaultPassword || '').trim();
-        setMedicalVaultPassword(current);
-        setInitialMedicalVaultPassword(current);
-      }
-
-      Alert.alert('Updated', 'Your profile settings were updated successfully.');
-    } catch (error) {
-      const code = String(error?.code || '').trim();
-      if (code === 'auth/requires-recent-login') {
-        Alert.alert('Re-login Needed', 'For security, please log out and log in again before changing email or password.');
-        return;
-      }
-      if (code === 'auth/wrong-password' || code === 'auth/invalid-credential') {
-        Alert.alert('Could Not Verify', 'Current password is incorrect.');
-        return;
-      }
-      Alert.alert('Update Failed', error.message || 'Could not update profile settings.');
-    } finally {
-      setIsSaving(false);
-    }
-  };
-
-  return (
-    <SafeAreaView style={styles.container}>
-      <ScrollView contentContainerStyle={styles.formContainer} keyboardShouldPersistTaps="handled">
-        <Text style={styles.title}>Profile & Settings</Text>
-        <Text style={styles.subtitle}>Update your own email and password.</Text>
-
-        {canManageUsers ? (
-          <>
-            <Text style={styles.formSectionLabel}>Medical Aid Vault Password</Text>
-            <TextInput
-              style={styles.formInput}
-              placeholder="Set shared vault password"
-              placeholderTextColor={FORM_PLACEHOLDER_COLOR}
-              value={medicalVaultPassword}
-              onChangeText={setMedicalVaultPassword}
-              autoCapitalize="none"
-              secureTextEntry={!isMedicalVaultPasswordVisible}
-            />
-            <TouchableOpacity
-              style={styles.modalButtonSecondary}
-              onPress={() => setIsMedicalVaultPasswordVisible((current) => !current)}
-            >
-              <Text style={styles.modalButtonSecondaryText}>
-                {isMedicalVaultPasswordVisible ? 'Hide Vault Password' : 'Show Vault Password'}
-              </Text>
-            </TouchableOpacity>
-            <Text style={styles.tapHint}>This password is shared across principal/admin and required for staff to unlock Medical Aid Vault.</Text>
-          </>
-        ) : null}
-
-        <Text style={styles.formSectionLabel}>Current Password (recommended)</Text>
-        <TextInput
-          style={styles.formInput}
-          placeholder="Current password"
-          placeholderTextColor={FORM_PLACEHOLDER_COLOR}
-          value={currentPassword}
-          onChangeText={setCurrentPassword}
-          secureTextEntry
-        />
-
-        <Text style={styles.formSectionLabel}>New Email (optional)</Text>
-        <TextInput
-          style={styles.formInput}
-          placeholder="newemail@example.com"
-          placeholderTextColor={FORM_PLACEHOLDER_COLOR}
-          value={newEmail}
-          onChangeText={setNewEmail}
-          autoCapitalize="none"
-          keyboardType="email-address"
-        />
-
-        <Text style={styles.formSectionLabel}>New Password (optional)</Text>
-        <TextInput
-          style={styles.formInput}
-          placeholder="At least 6 characters"
-          placeholderTextColor={FORM_PLACEHOLDER_COLOR}
-          value={newPassword}
-          onChangeText={setNewPassword}
-          secureTextEntry
-        />
-
-        <Text style={styles.formSectionLabel}>Confirm New Password</Text>
-        <TextInput
-          style={styles.formInput}
-          placeholder="Re-enter new password"
-          placeholderTextColor={FORM_PLACEHOLDER_COLOR}
-          value={confirmPassword}
-          onChangeText={setConfirmPassword}
-          secureTextEntry
-        />
-
-        <TouchableOpacity
-          style={[styles.saveStudentButton, isSaving && styles.saveStudentButtonDisabled]}
-          onPress={handleSave}
-          disabled={isSaving}
-        >
-          <Text style={styles.saveStudentButtonText}>{isSaving ? 'Saving...' : 'Save Settings'}</Text>
-        </TouchableOpacity>
-      </ScrollView>
-    </SafeAreaView>
-  );
-}
-
-function SchoolSettingsScreen() {
-  const accessProfile = useAccessProfile();
-  const isPrincipal = String(accessProfile?.role || '').trim().toLowerCase() === 'principal';
-  const [featureState, setFeatureState] = useState({
-    students: true,
-    activities: false,
-    staffAccess: true,
-    compliance: false,
-    pdfExport: true,
-  });
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    let isMounted = true;
-
-    const loadConfig = async () => {
-      if (!isPrincipal) {
-        setLoading(false);
-        return;
-      }
-
-      try {
-        const config = await getCurrentSchoolConfig();
-        if (!isMounted) return;
-        const next = config?.features && typeof config.features === 'object'
-          ? config.features
-          : accessProfile?.schoolFeatures;
-        setFeatureState((prev) => ({
-          ...prev,
-          ...(next || {}),
-        }));
-      } catch (error) {
-        if (!isMounted) return;
-        Alert.alert('Could Not Load', error.message || 'Failed to load school feature settings.');
-      } finally {
-        if (isMounted) {
-          setLoading(false);
-        }
-      }
-    };
-
-    loadConfig();
-
-    return () => {
-      isMounted = false;
-    };
-  }, [accessProfile?.schoolFeatures, isPrincipal]);
-
-  const toggleFeature = (key) => {
-    setFeatureState((prev) => ({
-      ...prev,
-      [key]: !prev[key],
-    }));
-  };
-
-  const handleSave = async () => {
-    try {
-      setSaving(true);
-      await updateCurrentSchoolFeatures(featureState, accessProfile?.uid || '');
-      Alert.alert('Saved', 'School features updated. Re-open Home to see the latest menu modules.');
-    } catch (error) {
-      Alert.alert('Save Failed', error.message || 'Could not update school features.');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const featureOptions = [
-    { key: 'students', label: 'Students' },
-    { key: 'activities', label: 'Activities' },
-    { key: 'staffAccess', label: 'Staff Access' },
-    { key: 'compliance', label: 'Compliance' },
-    { key: 'pdfExport', label: 'PDF Export' },
-  ];
-
-  return (
-    <SafeAreaView style={styles.container}>
-      <ScrollView contentContainerStyle={styles.formContainer}>
-        <Text style={styles.title}>School Settings</Text>
-        <Text style={styles.subtitle}>Principal controls for school modules.</Text>
-
-        {!isPrincipal ? (
-          <View style={styles.errorBox}>
-            <Text style={styles.warningText}>Only principal accounts can change school feature settings.</Text>
-          </View>
-        ) : null}
-
-        {isPrincipal ? (
-          <>
-            <Text style={styles.formSectionLabel}>Enabled Modules</Text>
-            <View style={styles.chipContainer}>
-              {featureOptions.map((item) => {
-                const selected = featureState[item.key] !== false;
-                return (
-                  <TouchableOpacity
-                    key={item.key}
-                    style={[styles.chipButton, selected && styles.chipButtonSelected]}
-                    onPress={() => toggleFeature(item.key)}
-                    disabled={loading || saving}
-                  >
-                    <Text style={[styles.chipButtonText, selected && styles.selectedActionText]}>
-                      {selected ? 'ON - ' : 'OFF - '}
-                      {item.label}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-
-            <TouchableOpacity
-              style={[styles.saveStudentButton, (loading || saving) && styles.saveStudentButtonDisabled]}
-              onPress={handleSave}
-              disabled={loading || saving}
-            >
-              <Text style={styles.saveStudentButtonText}>{saving ? 'Saving...' : 'Save Feature Settings'}</Text>
-            </TouchableOpacity>
-          </>
         ) : null}
       </ScrollView>
     </SafeAreaView>
@@ -1529,12 +1098,6 @@ function ManageUsersScreen({ navigation }) {
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState('');
   const [savingUid, setSavingUid] = useState('');
-  const [isCreatingUser, setIsCreatingUser] = useState(false);
-  const [newUserName, setNewUserName] = useState('');
-  const [newUserEmail, setNewUserEmail] = useState('');
-  const [newUserPassword, setNewUserPassword] = useState('123456');
-  const [newUserRole, setNewUserRole] = useState('teacher');
-  const [newUserAssignedClasses, setNewUserAssignedClasses] = useState([]);
 
   useEffect(() => {
     if (!canManageUsers) {
@@ -1575,58 +1138,6 @@ function ManageUsersScreen({ navigation }) {
       loadUsers();
     }, [loadUsers]),
   );
-
-  const classOptions = useMemo(() => {
-    const defaults = CLASSROOM_OPTIONS.filter((value) => value !== 'All Classes');
-    const fromStudents = (Array.isArray(students) ? students : [])
-      .map((student) => getClassroomName(student))
-      .filter(Boolean);
-    return Array.from(new Set([...defaults, ...fromStudents]));
-  }, [students]);
-
-  const handleToggleNewUserClass = (className) => {
-    setNewUserAssignedClasses((current) => (
-      current.includes(className)
-        ? current.filter((value) => value !== className)
-        : [...current, className]
-    ));
-  };
-
-  const resetNewUserForm = () => {
-    setNewUserName('');
-    setNewUserEmail('');
-    setNewUserPassword('123456');
-    setNewUserRole('teacher');
-    setNewUserAssignedClasses([]);
-  };
-
-  const handleCreateUser = async () => {
-    const email = String(newUserEmail || '').trim().toLowerCase();
-    const password = String(newUserPassword || '').trim();
-    const displayName = String(newUserName || '').trim();
-    if (!email || !password) {
-      Alert.alert('Missing Details', 'Please add email and temporary password for the new user.');
-      return;
-    }
-
-    try {
-      setIsCreatingUser(true);
-      const createdProfile = await createManagedUserAccount({
-        email,
-        password,
-        displayName,
-        role: newUserRole,
-        assignedClasses: newUserAssignedClasses,
-      });
-      setUserProfiles((current) => [...current, createdProfile].sort((left, right) => String(left.displayName || left.email || '').localeCompare(String(right.displayName || right.email || ''))));
-      resetNewUserForm();
-      Alert.alert('User Added', 'New user account created. Ask them to log in and change password.');
-    } catch (error) {
-      Alert.alert('Could Not Create User', error.message || 'Failed to create the user account.');
-    } finally {
-      setIsCreatingUser(false);
-    }
-  };
 
   const handleRoleChange = async (userProfile, nextRole) => {
     if (!canManageUsers || !userProfile?.uid || !nextRole) {
@@ -1719,77 +1230,6 @@ function ManageUsersScreen({ navigation }) {
     }
   };
 
-  const handleAssignedClassToggle = async (userProfile, className) => {
-    if (!canManageUsers || !userProfile?.uid || !className) {
-      return;
-    }
-
-    const currentAssigned = Array.isArray(userProfile.assignedClasses) ? userProfile.assignedClasses : [];
-    const nextAssigned = currentAssigned.includes(className)
-      ? currentAssigned.filter((value) => value !== className)
-      : [...currentAssigned, className];
-
-    try {
-      setSavingUid(userProfile.uid);
-      const updatedProfile = await updateUserAccessProfile(userProfile.uid, {
-        email: userProfile.email,
-        displayName: userProfile.displayName,
-        role: userProfile.role,
-        permissions: userProfile.permissions,
-        linkedStudentIds: userProfile.linkedStudentIds || [],
-        assignedClasses: nextAssigned,
-      });
-      setUserProfiles((currentUsers) => currentUsers.map((currentUser) => (
-        currentUser.uid === userProfile.uid ? updatedProfile : currentUser
-      )));
-    } catch (error) {
-      Alert.alert('Update Failed', error.message || 'Could not update class assignment.');
-    } finally {
-      setSavingUid('');
-    }
-  };
-
-  const handleRemoveUser = (userProfile) => {
-    if (!canManageUsers || !userProfile?.uid) {
-      return;
-    }
-    if (userProfile.uid === accessProfile.uid) {
-      Alert.alert('Not Allowed', 'You cannot remove your own account from Staff Access.');
-      return;
-    }
-
-    Alert.alert(
-      'Remove User',
-      `Remove ${userProfile.displayName || userProfile.email || 'this user'} from this school?`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Remove',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              setSavingUid(userProfile.uid);
-              await updateUserAccessProfile(userProfile.uid, {
-                email: userProfile.email,
-                displayName: userProfile.displayName,
-                role: userProfile.role,
-                permissions: userProfile.permissions,
-                linkedStudentIds: userProfile.linkedStudentIds || [],
-                assignedClasses: userProfile.assignedClasses || [],
-                isActive: false,
-              });
-              setUserProfiles((currentUsers) => currentUsers.filter((currentUser) => currentUser.uid !== userProfile.uid));
-            } catch (error) {
-              Alert.alert('Remove Failed', error.message || 'Could not remove this user.');
-            } finally {
-              setSavingUid('');
-            }
-          },
-        },
-      ],
-    );
-  };
-
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={styles.formContainer}>
@@ -1797,85 +1237,8 @@ function ManageUsersScreen({ navigation }) {
         <Text style={styles.subtitle}>Principal control for roles and permissions</Text>
 
         <View style={styles.infoBox}>
-          <Text style={styles.infoText}>Add, edit, and remove user access here. Class assignment is saved now for future class-restricted access updates.</Text>
+          <Text style={styles.infoText}>Create staff accounts in Firebase Authentication first. Once a staff member signs in once, they appear here and you can control what they are allowed to do.</Text>
         </View>
-
-        {canManageUsers ? (
-          <View style={styles.sectionCard}>
-            <Text style={styles.formSectionLabel}>Add New User</Text>
-
-            <TextInput
-              style={styles.formInput}
-              placeholder="Display Name"
-              placeholderTextColor={FORM_PLACEHOLDER_COLOR}
-              value={newUserName}
-              onChangeText={setNewUserName}
-            />
-            <TextInput
-              style={styles.formInput}
-              placeholder="Email"
-              placeholderTextColor={FORM_PLACEHOLDER_COLOR}
-              value={newUserEmail}
-              onChangeText={setNewUserEmail}
-              autoCapitalize="none"
-              keyboardType="email-address"
-            />
-            <TextInput
-              style={styles.formInput}
-              placeholder="Temporary Password"
-              placeholderTextColor={FORM_PLACEHOLDER_COLOR}
-              value={newUserPassword}
-              onChangeText={setNewUserPassword}
-              secureTextEntry
-            />
-
-            <Text style={styles.formSectionLabel}>Role</Text>
-            <View style={styles.actionRow}>
-              {ROLE_OPTIONS.map((roleOption) => (
-                <TouchableOpacity
-                  key={`new-user-${roleOption}`}
-                  style={[styles.chipButton, newUserRole === roleOption && styles.chipButtonSelected]}
-                  onPress={() => setNewUserRole(roleOption)}
-                  disabled={isCreatingUser}
-                >
-                  <Text style={[styles.chipButtonText, newUserRole === roleOption && styles.selectedActionText]}>
-                    {formatRoleLabel(roleOption)}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-
-            {newUserRole !== 'parent' ? (
-              <>
-                <Text style={styles.formSectionLabel}>Assigned Classes</Text>
-                <View style={styles.actionRow}>
-                  {classOptions.map((className) => {
-                    const selected = newUserAssignedClasses.includes(className);
-                    return (
-                      <TouchableOpacity
-                        key={`new-user-class-${className}`}
-                        style={[styles.chipButton, selected && styles.chipButtonSelected]}
-                        onPress={() => handleToggleNewUserClass(className)}
-                        disabled={isCreatingUser}
-                      >
-                        <Text style={[styles.chipButtonText, selected && styles.selectedActionText]}>{className}</Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </View>
-                <Text style={styles.tapHint}>Class assignment is stored for future restricted class access. Teachers currently still view all learners.</Text>
-              </>
-            ) : null}
-
-            <TouchableOpacity
-              style={[styles.saveStudentButton, isCreatingUser && styles.saveStudentButtonDisabled]}
-              onPress={handleCreateUser}
-              disabled={isCreatingUser}
-            >
-              <Text style={styles.saveStudentButtonText}>{isCreatingUser ? 'Creating...' : 'Create User'}</Text>
-            </TouchableOpacity>
-          </View>
-        ) : null}
 
         {!canManageUsers ? (
           <View style={styles.warningCard}>
@@ -1948,38 +1311,6 @@ function ManageUsersScreen({ navigation }) {
                 />
                 <Text style={styles.tapHint}>Parent accounts only see the learners selected here.</Text>
               </>
-            ) : null}
-
-            {userProfile.role !== 'parent' ? (
-              <>
-                <Text style={styles.formSectionLabel}>Assigned Classes</Text>
-                <View style={styles.actionRow}>
-                  {classOptions.map((className) => {
-                    const selected = Array.isArray(userProfile.assignedClasses) && userProfile.assignedClasses.includes(className);
-                    return (
-                      <TouchableOpacity
-                        key={`${userProfile.uid}-class-${className}`}
-                        style={[styles.chipButton, selected && styles.chipButtonSelected]}
-                        onPress={() => handleAssignedClassToggle(userProfile, className)}
-                        disabled={savingUid === userProfile.uid || !canManageUsers}
-                      >
-                        <Text style={[styles.chipButtonText, selected && styles.selectedActionText]}>{className}</Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </View>
-                <Text style={styles.tapHint}>Stored for future class-level user restriction. Current behavior still shows all students.</Text>
-              </>
-            ) : null}
-
-            {userProfile.uid !== accessProfile.uid ? (
-              <TouchableOpacity
-                style={[styles.modalButtonSecondary, savingUid === userProfile.uid && styles.saveStudentButtonDisabled]}
-                onPress={() => handleRemoveUser(userProfile)}
-                disabled={savingUid === userProfile.uid}
-              >
-                <Text style={styles.modalButtonSecondaryText}>Remove User</Text>
-              </TouchableOpacity>
             ) : null}
 
             {savingUid === userProfile.uid ? <Text style={styles.statusText}>Saving access changes...</Text> : null}
@@ -2059,20 +1390,19 @@ function StudentDirectoryScreen({ navigation }) {
 
   return (
     <SafeAreaView style={styles.container}>
-      <View style={styles.screenContainer}>
-        <View style={styles.studentDirectoryHeaderRow}>
-          <Text style={styles.title}>{isParentAccount ? 'My Child/Children' : 'Students'}</Text>
-          {canEditStudents ? (
-            <TouchableOpacity
-              style={[styles.addStudentButton, styles.addStudentButtonInline]}
-              onPress={() => navigation.navigate('StudentForm', { mode: 'add' })}
-            >
-              <Text style={styles.addStudentButtonText}>+ Add Student</Text>
-            </TouchableOpacity>
-          ) : null}
-        </View>
+      <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
+        <View style={styles.screenContainer}>
+<Text style={styles.title}>{isParentAccount ? 'My Child/Children' : 'Emergency Info'}</Text>
+        <Text style={styles.subtitle}>{isParentAccount ? 'Your linked learner records' : 'Student Directory by Class'}</Text>
 
-        {!canEditStudents ? (
+        {canEditStudents ? (
+          <TouchableOpacity
+            style={styles.addStudentButton}
+            onPress={() => navigation.navigate('StudentForm', { mode: 'add' })}
+          >
+            <Text style={styles.addStudentButtonText}>+ Add Student</Text>
+          </TouchableOpacity>
+        ) : (
           <View style={styles.infoBox}>
             <Text style={styles.infoText}>
               {isParentAccount
@@ -2080,7 +1410,7 @@ function StudentDirectoryScreen({ navigation }) {
                 : 'View-only student access: only principal/admin users can add or edit learners.'}
             </Text>
           </View>
-        ) : null}
+        )}
 
         <StudentAutocomplete
           students={visibleStudentPool}
@@ -2099,7 +1429,7 @@ function StudentDirectoryScreen({ navigation }) {
             });
           }}
           placeholder={isParentAccount ? 'Quick search your child' : 'Quick learner search across all classes'}
-          helperText={isParentAccount ? 'Start typing your child name for instant access.' : ''}
+          helperText={isParentAccount ? 'Start typing your child name for instant access.' : 'Start typing a learner name and tap the matching result for instant access.'}
         />
 
         {loading ? <Text style={styles.statusText}>Loading students...</Text> : null}
@@ -2120,7 +1450,7 @@ function StudentDirectoryScreen({ navigation }) {
                 >
                   <View>
                     <Text style={styles.studentName}>{getStudentFullName(student)}</Text>
-                    <Text style={styles.studentClassText}>{getClassroomName(student)}</Text>
+                    <Text style={styles.studentClassText}>{student.id} • {getClassroomName(student)}</Text>
                     <Text style={styles.tapHint}>Tap to open your child record</Text>
                   </View>
                 </TouchableOpacity>
@@ -2144,6 +1474,7 @@ function StudentDirectoryScreen({ navigation }) {
             ))}
           </ScrollView>
         </View>
+      </TouchableWithoutFeedback>
     </SafeAreaView>
   );
 }
@@ -2415,13 +1746,15 @@ function StudentClassFolderScreen({ route, navigation }) {
 
           return (
             <View key={student.id} style={styles.sectionCard}>
-              <View style={[styles.statusDot, statusStyleFor(attendanceEntry.status)]} />
               <View style={styles.itemHeaderRow}>
                 <TouchableOpacity onPress={() => navigation.navigate('EmergencyProfile', { student })}>
                   <Text style={styles.studentName}>{getStudentFullName(student)}</Text>
-                  <Text style={styles.studentClassText}>{getClassroomName(student)}</Text>
+                  <Text style={styles.studentClassText}>{student.id} • {getClassroomName(student)}</Text>
                   {isParentMarkedAbsent ? <Text style={styles.tapHint}>Parent marked this learner absent today.</Text> : null}
                 </TouchableOpacity>
+                <View style={[styles.statusBadge, statusStyleFor(attendanceEntry.status)]}>
+                  <Text style={styles.statusBadgeText}>{attendanceEntry.status}</Text>
+                </View>
               </View>
 
               <View style={styles.actionRow}>
@@ -2603,7 +1936,6 @@ function EmergencyProfileScreen({ route, navigation }) {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [parentAbsentSaving, setParentAbsentSaving] = useState(false);
   const [showParentAbsentDatePicker, setShowParentAbsentDatePicker] = useState(false);
-  const [schoolMedicalVaultPassword, setSchoolMedicalVaultPassword] = useState('');
   const [attendanceHistory, setAttendanceHistory] = useState([]);
   const [incidentHistory, setIncidentHistory] = useState([]);
   const [medicineHistory, setMedicineHistory] = useState([]);
@@ -2615,7 +1947,7 @@ function EmergencyProfileScreen({ route, navigation }) {
   const currentYear = parseInt(TODAY.split('-')[0], 10);
   const currentMonth = parseInt(TODAY.split('-')[1], 10);
   const currentDay = parseInt(TODAY.split('-')[2], 10);
-  const parentAbsentYear = String(currentYear);
+  const [parentAbsentYear, setParentAbsentYear] = useState(String(currentYear));
   const [parentAbsentMonth, setParentAbsentMonth] = useState(String(currentMonth).padStart(2, '0'));
   const [parentAbsentDay, setParentAbsentDay] = useState(String(currentDay).padStart(2, '0'));
   const parentAbsentDate = `${parentAbsentYear}-${parentAbsentMonth}-${parentAbsentDay}`;
@@ -2624,109 +1956,21 @@ function EmergencyProfileScreen({ route, navigation }) {
   );
   const hasParentMarkedAbsentForDate = Boolean(parentAbsentEntry?.parentReportedAbsent);
 
-  const refreshStudentAttendanceHistory = useCallback(async () => {
-    if (!student?.id) {
+  const refreshParentAttendanceHistory = useCallback(async () => {
+    if (!isParentAccount || !student?.id) {
       setAttendanceHistory([]);
       return;
     }
 
     const refreshedAttendance = await fetchAllAttendanceFromFirestore();
     const normalizedStudentId = String(student.id || '').trim();
-    const scopedAttendance = isParentAccount
-      ? filterRecordsByAccess(refreshedAttendance, accessProfile)
-      : refreshedAttendance;
-
     setAttendanceHistory(
-      scopedAttendance.filter((entry) => {
+      filterRecordsByAccess(refreshedAttendance, accessProfile).filter((entry) => {
         const entryStatus = String(entry.status || '').trim();
         return String(entry.studentId || '').trim() === normalizedStudentId && ['Absent', 'Late'].includes(entryStatus);
       }),
     );
   }, [isParentAccount, student?.id, accessProfile]);
-
-  const exportLearnerHistory = useCallback(async () => {
-    const escapeHtml = (value) => String(value || '')
-      .replaceAll('&', '&amp;')
-      .replaceAll('<', '&lt;')
-      .replaceAll('>', '&gt;')
-      .replaceAll('"', '&quot;')
-      .replaceAll("'", '&#39;');
-
-    const attendanceRows = attendanceHistory.map((entry) => `
-      <tr>
-        <td>${escapeHtml(entry.date || formatDateTime(entry.createdAt))}</td>
-        <td>${escapeHtml(entry.status || '')}</td>
-        <td>${escapeHtml(entry.reason || 'Not recorded')}</td>
-      </tr>
-    `).join('');
-
-    const incidentRows = incidentHistory.map((entry) => `
-      <tr>
-        <td>${escapeHtml(formatDateTime(entry.timestamp))}</td>
-        <td>${escapeHtml(entry.location || 'Incident')}</td>
-        <td>${escapeHtml(entry.description || '')}</td>
-        <td>${escapeHtml(entry.actionTaken || 'Not recorded')}</td>
-      </tr>
-    `).join('');
-
-    const medicineRows = medicineHistory.map((entry) => `
-      <tr>
-        <td>${escapeHtml(formatDateTime(entry.timeAdministered))}</td>
-        <td>${escapeHtml(entry.medicationName || 'Medication')}</td>
-        <td>${escapeHtml(entry.dosage || 'Not recorded')}</td>
-        <td>${escapeHtml(entry.staffMember || 'Not recorded')}</td>
-      </tr>
-    `).join('');
-
-    const html = `
-      <html>
-        <head>
-          <meta charset="utf-8" />
-          <style>
-            body { font-family: Arial, sans-serif; color: #102A43; padding: 18px; }
-            h1 { margin-bottom: 4px; font-size: 22px; }
-            h2 { margin-top: 18px; margin-bottom: 8px; font-size: 16px; }
-            p { margin: 2px 0; }
-            table { width: 100%; border-collapse: collapse; margin-top: 8px; }
-            th, td { border: 1px solid #D9E2EC; padding: 8px; text-align: left; vertical-align: top; font-size: 12px; }
-            th { background: #F0F4F8; }
-          </style>
-        </head>
-        <body>
-          <h1>Learner History Export</h1>
-          <p><strong>Learner:</strong> ${escapeHtml(getStudentFullName(student))}</p>
-          <p><strong>Class:</strong> ${escapeHtml(getClassroomName(student))}</p>
-          <p><strong>Generated:</strong> ${escapeHtml(new Date().toLocaleString())}</p>
-
-          <h2>Attendance (Absent and Late only)</h2>
-          ${attendanceRows ? `<table><thead><tr><th>Date</th><th>Status</th><th>Reason</th></tr></thead><tbody>${attendanceRows}</tbody></table>` : '<p>No records found.</p>'}
-
-          <h2>Incident History</h2>
-          ${incidentRows ? `<table><thead><tr><th>Date/Time</th><th>Location</th><th>Description</th><th>Action Taken</th></tr></thead><tbody>${incidentRows}</tbody></table>` : '<p>No records found.</p>'}
-
-          <h2>Medicine Log History</h2>
-          ${medicineRows ? `<table><thead><tr><th>Date/Time</th><th>Medication</th><th>Dosage</th><th>Staff Member</th></tr></thead><tbody>${medicineRows}</tbody></table>` : '<p>No records found.</p>'}
-        </body>
-      </html>
-    `;
-
-    try {
-      const file = await Print.printToFileAsync({ html });
-      const canShare = await Sharing.isAvailableAsync();
-
-      if (canShare) {
-        await Sharing.shareAsync(file.uri, {
-          mimeType: 'application/pdf',
-          dialogTitle: 'Export Learner History',
-          UTI: 'com.adobe.pdf',
-        });
-      } else {
-        await Linking.openURL(file.uri);
-      }
-    } catch (error) {
-      Alert.alert('Export Failed', error.message || 'Could not export learner history.');
-    }
-  }, [attendanceHistory, incidentHistory, medicineHistory, student]);
 
   const handleDial = async (phoneNumber) => {
     if (!phoneNumber) {
@@ -2754,7 +1998,7 @@ function EmergencyProfileScreen({ route, navigation }) {
   };
 
   const handleVerifyPin = () => {
-    const expectedPin = String(schoolMedicalVaultPassword || student.medicalPin || '1234').trim();
+    const expectedPin = String(student.medicalPin || '1234');
     if (pinInput !== expectedPin) {
       Alert.alert('Access Denied', 'Incorrect PIN.');
       return;
@@ -2807,7 +2051,7 @@ function EmergencyProfileScreen({ route, navigation }) {
               };
 
               await saveAttendanceRecord(parentAbsentDate, attendanceEntry, 'Absent', parentReason);
-              await refreshStudentAttendanceHistory();
+              await refreshParentAttendanceHistory();
 
               Alert.alert('Saved', `Your absence notice for ${parentAbsentDate} was shared with staff.`);
             } catch (error) {
@@ -2849,7 +2093,7 @@ function EmergencyProfileScreen({ route, navigation }) {
               };
 
               await saveAttendanceRecord(parentAbsentDate, parentAbsentEntry || fallbackEntry, 'Present', '');
-              await refreshStudentAttendanceHistory();
+              await refreshParentAttendanceHistory();
 
               Alert.alert('Updated', `Absence notice for ${parentAbsentDate} was removed.`);
             } catch (error) {
@@ -2871,29 +2115,10 @@ function EmergencyProfileScreen({ route, navigation }) {
   }, [canOpenThisStudent, navigation]);
 
   useEffect(() => {
-    let isMounted = true;
-
-    const loadSchoolVaultPassword = async () => {
-      try {
-        const schoolConfig = await getCurrentSchoolConfig();
-        if (!isMounted) return;
-        setSchoolMedicalVaultPassword(String(schoolConfig?.medicalVaultPassword || '').trim());
-      } catch (_error) {
-        if (isMounted) setSchoolMedicalVaultPassword('');
-      }
-    };
-
-    loadSchoolVaultPassword();
-    return () => {
-      isMounted = false;
-    };
-  }, [accessProfile?.schoolId]);
-
-  useEffect(() => {
     let isActive = true;
 
     const loadParentHistory = async () => {
-      if (!student?.id) {
+      if (!isParentAccount || !student?.id) {
         setAttendanceHistory([]);
         setIncidentHistory([]);
         setMedicineHistory([]);
@@ -2914,18 +2139,14 @@ function EmergencyProfileScreen({ route, navigation }) {
         }
 
         const normalizedStudentId = String(student.id || '').trim();
-        const scopedAttendance = isParentAccount ? filterRecordsByAccess(attendanceData, accessProfile) : attendanceData;
-        const scopedIncidents = isParentAccount ? filterRecordsByAccess(incidentData, accessProfile) : incidentData;
-        const scopedMedicine = isParentAccount ? filterRecordsByAccess(medicineData, accessProfile) : medicineData;
-
         setAttendanceHistory(
-          scopedAttendance.filter((entry) => {
+          filterRecordsByAccess(attendanceData, accessProfile).filter((entry) => {
             const entryStatus = String(entry.status || '').trim();
             return String(entry.studentId || '').trim() === normalizedStudentId && ['Absent', 'Late'].includes(entryStatus);
           }),
         );
-        setIncidentHistory(scopedIncidents.filter((entry) => String(entry.studentId || '').trim() === normalizedStudentId));
-        setMedicineHistory(scopedMedicine.filter((entry) => String(entry.studentId || '').trim() === normalizedStudentId));
+        setIncidentHistory(filterRecordsByAccess(incidentData, accessProfile).filter((entry) => String(entry.studentId || '').trim() === normalizedStudentId));
+        setMedicineHistory(filterRecordsByAccess(medicineData, accessProfile).filter((entry) => String(entry.studentId || '').trim() === normalizedStudentId));
       } catch (error) {
         console.warn('Could not load parent history view.', error);
       } finally {
@@ -2968,7 +2189,7 @@ function EmergencyProfileScreen({ route, navigation }) {
               onPress={() => handleDial(contact.number)}
             >
               <Text style={styles.contactButtonText}>
-                Call {contact.name || `Emergency Contact ${index + 1}`}: {formatPhoneForDisplay(contact.number)}
+                Call {contact.name || `Emergency Contact ${index + 1}`}: {contact.number || 'No number saved'}
               </Text>
             </TouchableOpacity>
           ))}
@@ -2977,7 +2198,7 @@ function EmergencyProfileScreen({ route, navigation }) {
             style={[styles.contactButton, styles.doctorButton]}
             onPress={() => handleDial(student.doctorContact)}
           >
-            <Text style={styles.contactButtonText}>Call Doctor: {formatPhoneForDisplay(student.doctorContact)}</Text>
+            <Text style={styles.contactButtonText}>Call Doctor: {student.doctorContact || 'No number saved'}</Text>
           </TouchableOpacity>
         </View>
 
@@ -3027,11 +2248,12 @@ function EmergencyProfileScreen({ route, navigation }) {
             <CompactDatePickerModal
               visible={showParentAbsentDatePicker}
               onClose={() => setShowParentAbsentDatePicker(false)}
-              onDateSelect={(_, m, d) => {
+              onDateSelect={(y, m, d) => {
+                setParentAbsentYear(y);
                 setParentAbsentMonth(m);
                 setParentAbsentDay(d);
               }}
-              currentYear={currentYear}
+              currentYear={parseInt(parentAbsentYear, 10)}
               currentMonth={parentAbsentMonth}
               currentDay={parentAbsentDay}
             />
@@ -3044,22 +2266,7 @@ function EmergencyProfileScreen({ route, navigation }) {
             Provider: {isMedicalAidVisible ? student.medicalAidName || 'Not recorded' : '********'}
           </Text>
           <Text style={styles.vaultText}>
-            Plan: {isMedicalAidVisible ? student.medicalAidPlan || 'Not recorded' : '********'}
-          </Text>
-          <Text style={styles.vaultText}>
             Number: {isMedicalAidVisible ? student.medicalAidNumber || 'Not recorded' : '************'}
-          </Text>
-          <Text style={styles.vaultText}>
-            Main Member: {isMedicalAidVisible ? student.mainMemberName || 'Not recorded' : '********'}
-          </Text>
-          <Text style={styles.vaultText}>
-            Main Member ID: {isMedicalAidVisible ? student.mainMemberIdNumber || 'Not recorded' : '************'}
-          </Text>
-          <Text style={styles.vaultText}>
-            Child ID: {isMedicalAidVisible ? student.childId || 'Not recorded' : '********'}
-          </Text>
-          <Text style={styles.vaultText}>
-            Child Dependency Code: {isMedicalAidVisible ? student.childDependencyCode || 'Not recorded' : '********'}
           </Text>
 
           <TouchableOpacity style={styles.vaultToggleButton} onPress={handleToggleMedicalAid}>
@@ -3069,42 +2276,42 @@ function EmergencyProfileScreen({ route, navigation }) {
           </TouchableOpacity>
         </View>
 
-        <Text style={styles.sectionTitle}>Attendance History</Text>
-        {historyLoading ? <Text style={styles.statusText}>Loading attendance history...</Text> : null}
-        {!historyLoading && attendanceHistory.length === 0 ? <Text style={styles.statusText}>No late or absent records yet.</Text> : null}
-        {attendanceHistory.slice(0, 12).map((entry) => (
-          <View key={entry.id} style={styles.timelineCard}>
-            <Text style={styles.studentName}>{entry.status}</Text>
-            <Text style={styles.timelineMeta}>{entry.date || formatDateTime(entry.createdAt)} • {entry.className || getClassroomName(student)}</Text>
-            {entry.reason ? <Text style={styles.timelineText}>Reason: {entry.reason}</Text> : null}
-          </View>
-        ))}
+        {isParentAccount ? (
+          <>
+            <Text style={styles.sectionTitle}>Attendance History</Text>
+            {historyLoading ? <Text style={styles.statusText}>Loading attendance history...</Text> : null}
+            {!historyLoading && attendanceHistory.length === 0 ? <Text style={styles.statusText}>No late or absent records yet.</Text> : null}
+            {attendanceHistory.slice(0, 12).map((entry) => (
+              <View key={entry.id} style={styles.timelineCard}>
+                <Text style={styles.studentName}>{entry.status}</Text>
+                <Text style={styles.timelineMeta}>{entry.date || formatDateTime(entry.createdAt)} • {entry.className || getClassroomName(student)}</Text>
+                {entry.reason ? <Text style={styles.timelineText}>Reason: {entry.reason}</Text> : null}
+              </View>
+            ))}
 
-        <Text style={styles.sectionTitle}>Incident History</Text>
-        {!historyLoading && incidentHistory.length === 0 ? <Text style={styles.statusText}>No incident records yet.</Text> : null}
-        {incidentHistory.slice(0, 12).map((entry) => (
-          <View key={entry.id} style={styles.timelineCard}>
-            <Text style={styles.studentName}>{entry.location || 'Incident'}</Text>
-            <Text style={styles.timelineMeta}>{formatDateTime(entry.timestamp)}</Text>
-            <Text style={styles.timelineText}>{entry.description}</Text>
-            <Text style={styles.tapHint}>Action taken: {entry.actionTaken || 'Not recorded'}</Text>
-          </View>
-        ))}
+            <Text style={styles.sectionTitle}>Incident History</Text>
+            {!historyLoading && incidentHistory.length === 0 ? <Text style={styles.statusText}>No incident records yet.</Text> : null}
+            {incidentHistory.slice(0, 12).map((entry) => (
+              <View key={entry.id} style={styles.timelineCard}>
+                <Text style={styles.studentName}>{entry.location || 'Incident'}</Text>
+                <Text style={styles.timelineMeta}>{formatDateTime(entry.timestamp)}</Text>
+                <Text style={styles.timelineText}>{entry.description}</Text>
+                <Text style={styles.tapHint}>Action taken: {entry.actionTaken || 'Not recorded'}</Text>
+              </View>
+            ))}
 
-        <Text style={styles.sectionTitle}>Medicine Log History</Text>
-        {!historyLoading && medicineHistory.length === 0 ? <Text style={styles.statusText}>No medicine entries yet.</Text> : null}
-        {medicineHistory.slice(0, 12).map((entry) => (
-          <View key={entry.id} style={styles.timelineCard}>
-            <Text style={styles.studentName}>{entry.medicationName || 'Medication'}</Text>
-            <Text style={styles.timelineMeta}>{formatDateTime(entry.timeAdministered)}</Text>
-            <Text style={styles.timelineText}>Dosage: {entry.dosage || 'Not recorded'}</Text>
-            <Text style={styles.tapHint}>Staff member: {entry.staffMember || 'Not recorded'}</Text>
-          </View>
-        ))}
-
-        <TouchableOpacity style={styles.reportButton} onPress={exportLearnerHistory}>
-          <Text style={styles.saveStudentButtonText}>Export Learner History</Text>
-        </TouchableOpacity>
+            <Text style={styles.sectionTitle}>Medicine Log History</Text>
+            {!historyLoading && medicineHistory.length === 0 ? <Text style={styles.statusText}>No medicine entries yet.</Text> : null}
+            {medicineHistory.slice(0, 12).map((entry) => (
+              <View key={entry.id} style={styles.timelineCard}>
+                <Text style={styles.studentName}>{entry.medicationName || 'Medication'}</Text>
+                <Text style={styles.timelineMeta}>{formatDateTime(entry.timeAdministered)}</Text>
+                <Text style={styles.timelineText}>Dosage: {entry.dosage || 'Not recorded'}</Text>
+                <Text style={styles.tapHint}>Staff member: {entry.staffMember || 'Not recorded'}</Text>
+              </View>
+            ))}
+          </>
+        ) : null}
 
         <Modal
           visible={isPinModalVisible}
@@ -3114,16 +2321,17 @@ function EmergencyProfileScreen({ route, navigation }) {
         >
           <View style={styles.modalBackdrop}>
             <View style={styles.modalCard}>
-              <Text style={styles.modalTitle}>Enter Password</Text>
-              <Text style={styles.modalText}>Enter your Medical Aid Vault password to view medical aid details.</Text>
+              <Text style={styles.modalTitle}>Enter PIN</Text>
+              <Text style={styles.modalText}>Enter your emergency access PIN to view medical aid details.</Text>
 
               <TextInput
                 style={styles.pinInput}
                 value={pinInput}
                 onChangeText={setPinInput}
-                placeholder="Vault password"
+                placeholder="4-digit PIN"
                 secureTextEntry
-                autoCapitalize="none"
+                keyboardType="number-pad"
+                maxLength={4}
               />
 
               <View style={styles.modalButtonsRow}>
@@ -3766,10 +2974,10 @@ function ActivitiesScreen({ navigation }) {
   const [showExportModal, setShowExportModal] = useState(false);
   const [showStartPicker, setShowStartPicker] = useState(false);
   const [showEndPicker, setShowEndPicker] = useState(false);
-  const startYear = String(currentYear);
+  const [startYear, setStartYear] = useState(String(currentYear));
   const [startMonth, setStartMonth] = useState(String(currentMonth).padStart(2, '0'));
   const [startDay, setStartDay] = useState(String(currentDay).padStart(2, '0'));
-  const endYear = String(currentYear);
+  const [endYear, setEndYear] = useState(String(currentYear));
   const [endMonth, setEndMonth] = useState(String(currentMonth).padStart(2, '0'));
   const [endDay, setEndDay] = useState(String(currentDay).padStart(2, '0'));
   const [exporting, setExporting] = useState(false);
@@ -4007,7 +3215,7 @@ function ActivitiesScreen({ navigation }) {
           <View style={styles.complianceEmptyState}>
             <Text style={styles.complianceEmptyText}>No activities found.</Text>
             {isParentAccount ? (
-              <Text style={styles.complianceEmptyHint}>No activities have been logged yet for your child class.</Text>
+              <Text style={styles.complianceEmptyHint}>No activities have been logged yet for your child\'s class.</Text>
             ) : isTeacher ? (
               <Text style={styles.complianceEmptyHint}>You have not logged any activities yet. Use the button above.</Text>
             ) : (
@@ -4150,11 +3358,12 @@ function ActivitiesScreen({ navigation }) {
         <CompactDatePickerModal
           visible={showStartPicker}
           onClose={() => setShowStartPicker(false)}
-          onDateSelect={(_, m, d) => {
+          onDateSelect={(y, m, d) => {
+            setStartYear(y);
             setStartMonth(m);
             setStartDay(d);
           }}
-          currentYear={currentYear}
+          currentYear={parseInt(startYear, 10)}
           currentMonth={startMonth}
           currentDay={startDay}
         />
@@ -4162,11 +3371,12 @@ function ActivitiesScreen({ navigation }) {
         <CompactDatePickerModal
           visible={showEndPicker}
           onClose={() => setShowEndPicker(false)}
-          onDateSelect={(_, m, d) => {
+          onDateSelect={(y, m, d) => {
+            setEndYear(y);
             setEndMonth(m);
             setEndDay(d);
           }}
-          currentYear={currentYear}
+          currentYear={parseInt(endYear, 10)}
           currentMonth={endMonth}
           currentDay={endDay}
         />
@@ -4808,16 +4018,15 @@ function ComplianceReportsScreen({ navigation }) {
   const accessProfile = useAccessProfile();
   const canExportReports = hasPermission(accessProfile, 'canExportReports');
   const [schoolName, setSchoolName] = useState(DEFAULT_SCHOOL_NAME);
-  const [isGenerating, setIsGenerating] = useState(false);
 
   const currentYear = parseInt(TODAY.split('-')[0], 10);
   const currentMonth = parseInt(TODAY.split('-')[1], 10);
   const currentDay = parseInt(TODAY.split('-')[2], 10);
 
-  const startYear = String(currentYear);
+  const [startYear, setStartYear] = useState(String(currentYear));
   const [startMonth, setStartMonth] = useState(String(currentMonth).padStart(2, '0'));
   const [startDay, setStartDay] = useState(String(currentDay).padStart(2, '0'));
-  const endYear = String(currentYear);
+  const [endYear, setEndYear] = useState(String(currentYear));
   const [endMonth, setEndMonth] = useState(String(currentMonth).padStart(2, '0'));
   const [endDay, setEndDay] = useState(String(currentDay).padStart(2, '0'));
 
@@ -4840,179 +4049,17 @@ function ComplianceReportsScreen({ navigation }) {
       return;
     }
 
-    setIsGenerating(true);
-    try {
-      const escapeHtml = (value) => String(value || '')
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#039;');
+    const url = `${API_BASE_URL}/exports/compliance-report?schoolName=${encodeURIComponent(
+      schoolName.trim() || DEFAULT_SCHOOL_NAME,
+    )}&startDate=${encodeURIComponent(startDate)}&endDate=${encodeURIComponent(endDate)}`;
 
-      // Fetch all data from Firestore
-      const students = await fetchStudentsFromFirestore();
-      const attendance = await fetchAllAttendanceFromFirestore();
-      const incidents = await fetchIncidentsFromFirestore();
-      const medicine = await fetchMedicineLogsFromFirestore();
-
-      // Filter data by date range
-      const filteredAttendance = (attendance || []).filter((entry) => {
-        const entryDate = entry?.date || '';
-        return entryDate >= startDate && entryDate <= endDate;
-      });
-
-      const filteredIncidents = (incidents || []).filter((incident) => {
-        const incidentDate = (incident?.timestamp || '').split('T')[0];
-        return incidentDate >= startDate && incidentDate <= endDate;
-      });
-
-      const filteredMedicine = (medicine || []).filter((entry) => {
-        const medDate = (entry?.timeAdministered || '').split('T')[0];
-        return medDate >= startDate && medDate <= endDate;
-      });
-
-      // Build attendance table rows
-      const absentLateAttendance = filteredAttendance.filter((e) => e?.status && ['Absent', 'Late'].includes(e.status));
-      const attendanceRows = absentLateAttendance
-        .map((entry) => `<tr><td>${escapeHtml(entry.date || '-')}</td><td>${escapeHtml(entry.studentName || 'Unknown')}</td><td>${escapeHtml(entry.status || '')}</td><td>${escapeHtml(entry.reason || '')}</td></tr>`)
-        .join('');
-
-      // Build incident table rows
-      const incidentRows = filteredIncidents
-        .map((incident) => {
-          const incidentTime = incident?.timestamp ? new Date(incident.timestamp).toLocaleString() : '-';
-          return `<tr><td>${escapeHtml(incidentTime)}</td><td>${escapeHtml(incident.location || '-')}</td><td>${escapeHtml(incident.studentName || 'General')}</td><td>${escapeHtml(incident.description || '-')}</td><td>${escapeHtml(incident.actionTaken || '-')}</td></tr>`;
-        })
-        .join('');
-
-      // Build medicine table rows
-      const medicineRows = filteredMedicine
-        .map((entry) => {
-          const medTime = entry?.timeAdministered ? new Date(entry.timeAdministered).toLocaleString() : '-';
-          return `<tr><td>${escapeHtml(medTime)}</td><td>${escapeHtml(entry.studentName || 'Unknown')}</td><td>${escapeHtml(entry.medicationName || '-')}</td><td>${escapeHtml(entry.dosage || '-')}</td><td>${escapeHtml(entry.staffMember || '-')}</td><td>${entry.allergyWarning ? 'YES' : 'No'}</td></tr>`;
-        })
-        .join('');
-
-      const html = `
-        <!DOCTYPE html>
-        <html>
-          <head>
-            <meta charset="UTF-8" />
-            <style>
-              @page {
-                margin: 72px 72px 72px 72px;
-              }
-              * { margin: 0; padding: 0; box-sizing: border-box; }
-              body { 
-                font-family: Helvetica, Arial, sans-serif; 
-                padding: 48px 48px;
-                line-height: 1.4;
-              }
-              h1 { 
-                color: #102A43; 
-                font-size: 24px; 
-                margin: 0 0 16px 0;
-                padding: 0;
-              }
-              .header-info {
-                margin: 0 0 24px 0;
-              }
-              .header-info p { 
-                margin: 6px 0; 
-                color: #333; 
-                font-size: 12px;
-              }
-              .section {
-                page-break-before: always;
-                margin: 0;
-                padding: 24px 0 0 0;
-              }
-              .section:first-of-type {
-                page-break-before: avoid;
-                padding: 0;
-              }
-              h2 { 
-                color: #102A43; 
-                font-size: 16px; 
-                margin: 0 0 16px 0;
-                padding: 0;
-                font-weight: bold;
-              }
-              p { 
-                margin: 0; 
-                color: #333; 
-                font-size: 12px;
-                padding: 12px 0;
-              }
-              table { 
-                width: 100%; 
-                border-collapse: collapse; 
-                margin: 12px 0 0 0; 
-                font-size: 11px;
-              }
-              th { 
-                background: #102A43; 
-                color: white; 
-                padding: 10px 8px; 
-                text-align: left; 
-                font-weight: bold;
-                border: 1px solid #333;
-              }
-              td { 
-                padding: 8px; 
-                border: 1px solid #E0E0E0;
-              }
-              tr:nth-child(even) { 
-                background: #F8FAFC; 
-              }
-              tr:nth-child(odd) {
-                background: #FFFFFF;
-              }
-            </style>
-          </head>
-          <body>
-            <div class="header-info">
-              <h1>School Safety & Compliance Report</h1>
-              <p><strong>School:</strong> ${escapeHtml(schoolName.trim() || DEFAULT_SCHOOL_NAME)}</p>
-              <p><strong>Date Range:</strong> ${escapeHtml(startDate)} to ${escapeHtml(endDate)}</p>
-              <p><strong>Generated:</strong> ${escapeHtml(new Date().toLocaleString())}</p>
-            </div>
-
-            <div class="section">
-              <h2>Attendance Register (Absent and Late only)</h2>
-              ${attendanceRows ? `<table><thead><tr><th>Date</th><th>Learner</th><th>Status</th><th>Reason</th></tr></thead><tbody>${attendanceRows}</tbody></table>` : '<p>No absences or late arrivals recorded.</p>'}
-            </div>
-
-            <div class="section">
-              <h2>Incident / Accident Register</h2>
-              ${incidentRows ? `<table><thead><tr><th>Date/Time</th><th>Location</th><th>Learner</th><th>Description</th><th>Action Taken</th></tr></thead><tbody>${incidentRows}</tbody></table>` : '<p>No incidents recorded.</p>'}
-            </div>
-
-            <div class="section">
-              <h2>Medicine Administration Log</h2>
-              ${medicineRows ? `<table><thead><tr><th>Date/Time</th><th>Learner</th><th>Medication</th><th>Dosage</th><th>Staff Member</th><th>Allergy Warning</th></tr></thead><tbody>${medicineRows}</tbody></table>` : '<p>No medicine logs recorded.</p>'}
-            </div>
-          </body>
-        </html>
-      `;
-
-      const file = await Print.printToFileAsync({ html });
-      const canShare = await Sharing.isAvailableAsync();
-
-      if (canShare) {
-        await Sharing.shareAsync(file.uri, {
-          mimeType: 'application/pdf',
-          dialogTitle: 'Export Compliance Report',
-          UTI: 'com.adobe.pdf',
-        });
-      } else {
-        await Linking.openURL(file.uri);
-      }
-    } catch (error) {
-      Alert.alert('Export Failed', error.message || 'Could not generate compliance report.');
-    } finally {
-      setIsGenerating(false);
+    const supported = await Linking.canOpenURL(url);
+    if (!supported) {
+      Alert.alert('Open Failed', 'Could not open the PDF export link.');
+      return;
     }
+
+    await Linking.openURL(url);
   };
 
   return (
@@ -5055,18 +4102,19 @@ function ComplianceReportsScreen({ navigation }) {
           </View>
         </View>
 
-        <TouchableOpacity style={[styles.reportButton, isGenerating && { opacity: 0.6 }]} onPress={handleExport} disabled={isGenerating}>
-          <Text style={styles.saveStudentButtonText}>{isGenerating ? 'Generating PDF...' : 'Open PDF Export'}</Text>
+        <TouchableOpacity style={styles.reportButton} onPress={handleExport}>
+          <Text style={styles.saveStudentButtonText}>Open PDF Export</Text>
         </TouchableOpacity>
 
         <CompactDatePickerModal
           visible={showStartPicker}
           onClose={() => setShowStartPicker(false)}
-          onDateSelect={(_, m, d) => {
+          onDateSelect={(y, m, d) => {
+            setStartYear(y);
             setStartMonth(m);
             setStartDay(d);
           }}
-          currentYear={currentYear}
+          currentYear={parseInt(startYear, 10)}
           currentMonth={startMonth}
           currentDay={startDay}
         />
@@ -5074,11 +4122,12 @@ function ComplianceReportsScreen({ navigation }) {
         <CompactDatePickerModal
           visible={showEndPicker}
           onClose={() => setShowEndPicker(false)}
-          onDateSelect={(_, m, d) => {
+          onDateSelect={(y, m, d) => {
+            setEndYear(y);
             setEndMonth(m);
             setEndDay(d);
           }}
-          currentYear={currentYear}
+          currentYear={parseInt(endYear, 10)}
           currentMonth={endMonth}
           currentDay={endDay}
         />
@@ -5093,7 +4142,7 @@ function CompactDatePickerColumn({ items, selectedValue, onSelect, label }) {
 
   const currentIndex = items.indexOf(selectedValue);
 
-  const updateSelectionFromOffset = (event) => {
+  const handleMomentumScrollEnd = (event) => {
     const offsetY = event.nativeEvent.contentOffset.y;
     const index = Math.round(offsetY / itemHeight);
     if (index >= 0 && index < items.length) {
@@ -5120,12 +4169,9 @@ function CompactDatePickerColumn({ items, selectedValue, onSelect, label }) {
           scrollEventThrottle={16}
           snapToInterval={itemHeight}
           decelerationRate="fast"
-          nestedScrollEnabled
           showsVerticalScrollIndicator={false}
-          onMomentumScrollEnd={updateSelectionFromOffset}
-          onScrollEndDrag={updateSelectionFromOffset}
+          onMomentumScrollEnd={handleMomentumScrollEnd}
           style={styles.compactDatePickerScroll}
-          contentContainerStyle={styles.compactDatePickerScrollContent}
         >
           {items.map((item) => (
             <View key={item} style={{ height: itemHeight, justifyContent: 'center', alignItems: 'center' }}>
@@ -5157,7 +4203,6 @@ function StudentFormScreen({ navigation, route }) {
 
   const [firstName, setFirstName] = useState(initialStudent?.firstName || '');
   const [lastName, setLastName] = useState(initialStudent?.lastName || '');
-  const [childId, setChildId] = useState(initialStudent?.childId || '');
   const [className, setClassName] = useState(initialStudent?.className || CLASSROOM_OPTIONS[1]);
   const [emergencyContact1Name, setEmergencyContact1Name] = useState(initialEmergencyContacts[0]?.name || '');
   const [emergencyContact1Number, setEmergencyContact1Number] = useState(initialEmergencyContacts[0]?.number || '');
@@ -5167,50 +4212,12 @@ function StudentFormScreen({ navigation, route }) {
   const [emergencyContact3Number, setEmergencyContact3Number] = useState(initialEmergencyContacts[2]?.number || '');
   const [allergies, setAllergies] = useState(initialStudent?.allergies || '');
   const [medicalAidName, setMedicalAidName] = useState(initialStudent?.medicalAidName || '');
-  const [medicalAidPlan, setMedicalAidPlan] = useState(initialStudent?.medicalAidPlan || '');
   const [medicalAidNumber, setMedicalAidNumber] = useState(initialStudent?.medicalAidNumber || '');
-  const [mainMemberName, setMainMemberName] = useState(initialStudent?.mainMemberName || '');
-  const [mainMemberIdNumber, setMainMemberIdNumber] = useState(initialStudent?.mainMemberIdNumber || '');
-  const [childDependencyCode, setChildDependencyCode] = useState(initialStudent?.childDependencyCode || '');
   const [doctorContact, setDoctorContact] = useState(initialStudent?.doctorContact || '');
   const [medicalPin, setMedicalPin] = useState(initialStudent?.medicalPin || '');
   const [isSaving, setIsSaving] = useState(false);
-  const [knownClassOptions, setKnownClassOptions] = useState(CLASSROOM_OPTIONS.slice(1));
   const isParentEditMode = mode === 'parent-edit';
   const canSaveStudent = canEditStudents || (isParentEditMode && canEditOwnChildMedicalInfo && canAccessStudent(accessProfile, initialStudent));
-
-  useEffect(() => {
-    let isMounted = true;
-
-    const loadKnownClasses = async () => {
-      try {
-        const data = await loadStudentsFromDataStore();
-        if (!isMounted) return;
-        const discovered = (Array.isArray(data) ? data : [])
-          .map((student) => getClassroomName(student))
-          .filter(Boolean);
-        setKnownClassOptions(Array.from(new Set([...CLASSROOM_OPTIONS.slice(1), ...discovered])));
-      } catch (_error) {
-        if (isMounted) {
-          setKnownClassOptions(CLASSROOM_OPTIONS.slice(1));
-        }
-      }
-    };
-
-    loadKnownClasses();
-
-    return () => {
-      isMounted = false;
-    };
-  }, []);
-
-  const classFolderOptions = useMemo(() => {
-    const currentValue = String(className || '').trim();
-    return Array.from(new Set([
-      ...knownClassOptions,
-      ...(currentValue ? [currentValue] : []),
-    ]));
-  }, [knownClassOptions, className]);
 
   const handleSubmit = async () => {
     if (!canSaveStudent) {
@@ -5237,18 +4244,13 @@ function StudentFormScreen({ navigation, route }) {
     ].filter((contact) => contact.name || contact.number);
 
     const payload = {
-      childId: isParentEditMode ? String(initialStudent?.childId || childId).trim() : childId.trim(),
       firstName: isParentEditMode ? String(initialStudent?.firstName || firstName).trim() : firstName.trim(),
       lastName: isParentEditMode ? String(initialStudent?.lastName || lastName).trim() : lastName.trim(),
       className: isParentEditMode ? String(initialStudent?.className || className).trim() : className.trim() || CLASSROOM_OPTIONS[1],
       emergencyContacts,
       allergies: allergies.trim() || 'No known allergies',
       medicalAidName: medicalAidName.trim(),
-      medicalAidPlan: medicalAidPlan.trim(),
       medicalAidNumber: medicalAidNumber.trim(),
-      mainMemberName: mainMemberName.trim(),
-      mainMemberIdNumber: mainMemberIdNumber.trim(),
-      childDependencyCode: childDependencyCode.trim(),
       doctorContact: doctorContact.trim(),
       medicalPin: medicalPin.trim(),
     };
@@ -5284,15 +4286,6 @@ function StudentFormScreen({ navigation, route }) {
 
         {!isParentEditMode ? (
           <>
-            <Text style={styles.formSectionLabel}>Child ID</Text>
-            <TextInput
-              style={styles.formInput}
-              placeholder="Child ID"
-              placeholderTextColor={FORM_PLACEHOLDER_COLOR}
-              value={childId}
-              onChangeText={setChildId}
-            />
-            <Text style={styles.formSectionLabel}>First Name</Text>
             <TextInput
               style={styles.formInput}
               placeholder="First Name"
@@ -5300,7 +4293,6 @@ function StudentFormScreen({ navigation, route }) {
               value={firstName}
               onChangeText={setFirstName}
             />
-            <Text style={styles.formSectionLabel}>Last Name</Text>
             <TextInput
               style={styles.formInput}
               placeholder="Last Name"
@@ -5318,7 +4310,7 @@ function StudentFormScreen({ navigation, route }) {
               onChangeText={setClassName}
             />
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipContainer}>
-              {classFolderOptions.map((option) => (
+              {CLASSROOM_OPTIONS.slice(1).map((option) => (
                 <TouchableOpacity
                   key={option}
                   style={[
@@ -5335,7 +4327,6 @@ function StudentFormScreen({ navigation, route }) {
         ) : null}
 
         <Text style={styles.formSectionLabel}>Emergency Contact 1 (Required)</Text>
-        <Text style={styles.formSectionLabel}>Emergency Contact 1 Name</Text>
         <TextInput
           style={styles.formInput}
           placeholder="Emergency Contact 1 Name"
@@ -5343,7 +4334,6 @@ function StudentFormScreen({ navigation, route }) {
           value={emergencyContact1Name}
           onChangeText={setEmergencyContact1Name}
         />
-        <Text style={styles.formSectionLabel}>Emergency Contact 1 Number</Text>
         <TextInput
           style={styles.formInput}
           placeholder="Emergency Contact 1 Number"
@@ -5353,7 +4343,6 @@ function StudentFormScreen({ navigation, route }) {
         />
 
         <Text style={styles.formSectionLabel}>Emergency Contact 2 (Optional)</Text>
-        <Text style={styles.formSectionLabel}>Emergency Contact 2 Name</Text>
         <TextInput
           style={styles.formInput}
           placeholder="Emergency Contact 2 Name"
@@ -5361,7 +4350,6 @@ function StudentFormScreen({ navigation, route }) {
           value={emergencyContact2Name}
           onChangeText={setEmergencyContact2Name}
         />
-        <Text style={styles.formSectionLabel}>Emergency Contact 2 Number</Text>
         <TextInput
           style={styles.formInput}
           placeholder="Emergency Contact 2 Number"
@@ -5371,7 +4359,6 @@ function StudentFormScreen({ navigation, route }) {
         />
 
         <Text style={styles.formSectionLabel}>Emergency Contact 3 (Optional)</Text>
-        <Text style={styles.formSectionLabel}>Emergency Contact 3 Name</Text>
         <TextInput
           style={styles.formInput}
           placeholder="Emergency Contact 3 Name"
@@ -5379,7 +4366,6 @@ function StudentFormScreen({ navigation, route }) {
           value={emergencyContact3Name}
           onChangeText={setEmergencyContact3Name}
         />
-        <Text style={styles.formSectionLabel}>Emergency Contact 3 Number</Text>
         <TextInput
           style={styles.formInput}
           placeholder="Emergency Contact 3 Number"
@@ -5398,7 +4384,6 @@ function StudentFormScreen({ navigation, route }) {
         />
 
         <Text style={styles.formSectionLabel}>Medical Information</Text>
-        <Text style={styles.formSectionLabel}>Medical Aid Name</Text>
         <TextInput
           style={styles.formInput}
           placeholder="Medical Aid Name"
@@ -5406,15 +4391,6 @@ function StudentFormScreen({ navigation, route }) {
           value={medicalAidName}
           onChangeText={setMedicalAidName}
         />
-        <Text style={styles.formSectionLabel}>Medical Aid Plan</Text>
-        <TextInput
-          style={styles.formInput}
-          placeholder="Medical Aid Plan"
-          placeholderTextColor={FORM_PLACEHOLDER_COLOR}
-          value={medicalAidPlan}
-          onChangeText={setMedicalAidPlan}
-        />
-        <Text style={styles.formSectionLabel}>Medical Aid Number</Text>
         <TextInput
           style={styles.formInput}
           placeholder="Medical Aid Number"
@@ -5422,32 +4398,6 @@ function StudentFormScreen({ navigation, route }) {
           value={medicalAidNumber}
           onChangeText={setMedicalAidNumber}
         />
-        <Text style={styles.formSectionLabel}>Main Member Name</Text>
-        <TextInput
-          style={styles.formInput}
-          placeholder="Main Member Name"
-          placeholderTextColor={FORM_PLACEHOLDER_COLOR}
-          value={mainMemberName}
-          onChangeText={setMainMemberName}
-        />
-        <Text style={styles.formSectionLabel}>Main Member ID Number</Text>
-        <TextInput
-          style={styles.formInput}
-          placeholder="Main Member ID Number"
-          placeholderTextColor={FORM_PLACEHOLDER_COLOR}
-          value={mainMemberIdNumber}
-          onChangeText={setMainMemberIdNumber}
-          keyboardType="number-pad"
-        />
-        <Text style={styles.formSectionLabel}>Child Dependency Code</Text>
-        <TextInput
-          style={styles.formInput}
-          placeholder="Child Dependency Code"
-          placeholderTextColor={FORM_PLACEHOLDER_COLOR}
-          value={childDependencyCode}
-          onChangeText={setChildDependencyCode}
-        />
-        <Text style={styles.formSectionLabel}>Doctor Contact</Text>
         <TextInput
           style={styles.formInput}
           placeholder="Doctor Contact"
@@ -5455,7 +4405,6 @@ function StudentFormScreen({ navigation, route }) {
           value={doctorContact}
           onChangeText={setDoctorContact}
         />
-        <Text style={styles.formSectionLabel}>Medical PIN</Text>
         <TextInput
           style={styles.formInput}
           placeholder="Medical PIN"
@@ -5479,4 +4428,1240 @@ function StudentFormScreen({ navigation, route }) {
   );
 }
 
-
+const styles = StyleSheet.create({
+  loginScreenContainer: {
+    flex: 1,
+    backgroundColor: '#F8F9FA',
+    justifyContent: 'center',
+    padding: 24,
+  },
+  loginCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 8,
+    padding: 24,
+    borderWidth: 1,
+    borderColor: '#E8EAED',
+    shadowColor: '#000000',
+    shadowOpacity: 0.08,
+    shadowRadius: 3,
+    shadowOffset: { width: 0, height: 1 },
+    elevation: 1,
+  },
+  loginTitle: {
+    fontSize: 26,
+    fontWeight: '600',
+    color: '#202124',
+    marginBottom: 8,
+  },
+  loginSubtitle: {
+    fontSize: 15,
+    color: '#3C4043',
+    marginBottom: 14,
+    lineHeight: 24,
+  },
+  loginButton: {
+    marginTop: 4,
+    backgroundColor: '#1A73E8',
+    borderRadius: 6,
+    alignItems: 'center',
+    paddingVertical: 13,
+  },
+  loginHint: {
+    marginTop: 12,
+    color: '#80868B',
+    textAlign: 'center',
+    fontSize: 13,
+  },
+  container: {
+    flex: 1,
+    backgroundColor: '#F8F9FA',
+  },
+  screenContainer: {
+    flex: 1,
+    padding: 24,
+  },
+  formContainer: {
+    padding: 24,
+    paddingBottom: 40,
+  },
+  homeHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: 12,
+  },
+  homeHeaderTextWrap: {
+    flex: 1,
+  },
+  logoutButton: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#E8EAED',
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    minHeight: 40,
+    justifyContent: 'center',
+  },
+  logoutButtonText: {
+    color: '#3C4043',
+    fontWeight: '600',
+  },
+  title: {
+    fontSize: 28,
+    fontWeight: '600',
+    color: '#202124',
+  },
+  subtitle: {
+    fontSize: 15,
+    color: '#3C4043',
+    marginBottom: 8,
+    lineHeight: 24,
+  },
+  helperText: {
+    color: '#80868B',
+    marginBottom: 12,
+    lineHeight: 24,
+    fontSize: 14,
+  },
+  addStudentButton: {
+    alignSelf: 'flex-start',
+    backgroundColor: '#1A73E8',
+    borderRadius: 6,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    minHeight: 44,
+    justifyContent: 'center',
+    marginBottom: 12,
+  },
+  addStudentButtonText: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+  },
+  moduleCard: {
+    marginTop: 8,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 8,
+    padding: 24,
+    borderWidth: 1,
+    borderColor: '#E8EAED',
+    shadowColor: '#000000',
+    shadowOpacity: 0.08,
+    shadowRadius: 3,
+    shadowOffset: { width: 0, height: 1 },
+    elevation: 1,
+  },
+  moduleTitle: {
+    fontSize: 20,
+    fontWeight: '600',
+    color: '#202124',
+    marginBottom: 4,
+  },
+  moduleSubtitle: {
+    color: '#3C4043',
+    fontSize: 14,
+    fontWeight: '400',
+    lineHeight: 22,
+  },
+  folderHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  folderTextWrap: {
+    flex: 1,
+  },
+  folderToggleText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#1A73E8',
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  folderContentCard: {
+    marginTop: -4,
+    marginBottom: 12,
+    paddingHorizontal: 4,
+  },
+  searchInput: {
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E8EAED',
+    borderRadius: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    marginBottom: 16,
+    fontSize: 15,
+    color: '#3C4043',
+  },
+  listContent: {
+    paddingBottom: 14,
+  },
+  classSectionCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 8,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#E8EAED',
+    marginBottom: 12,
+  },
+  classHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+    gap: 8,
+  },
+  classSectionTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#202124',
+  },
+  classCountText: {
+    color: '#80868B',
+    fontWeight: '600',
+  },
+  studentItem: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 8,
+    padding: 20,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#E8EAED',
+    shadowColor: '#000000',
+    shadowOpacity: 0.08,
+    shadowRadius: 3,
+    shadowOffset: { width: 0, height: 1 },
+    elevation: 1,
+  },
+  sectionCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 8,
+    padding: 20,
+    borderWidth: 1,
+    borderColor: '#E8EAED',
+    marginBottom: 16,
+    shadowColor: '#000000',
+    shadowOpacity: 0.08,
+    shadowRadius: 3,
+    shadowOffset: { width: 0, height: 1 },
+    elevation: 1,
+  },
+  studentName: {
+    fontSize: 18,
+    color: '#202124',
+    fontWeight: '600',
+  },
+  studentClassText: {
+    marginTop: 4,
+    color: '#80868B',
+    fontWeight: '500',
+    fontSize: 14,
+  },
+  tapHint: {
+    marginTop: 5,
+    color: '#80868B',
+    fontWeight: '400',
+    fontSize: 13,
+  },
+  statusText: {
+    color: '#3C4043',
+    marginBottom: 10,
+  },
+  errorText: {
+    color: '#B91C1C',
+    marginBottom: 10,
+    fontWeight: '600',
+  },
+  profileName: {
+    fontSize: 29,
+    color: '#202124',
+    fontWeight: '600',
+    marginBottom: 10,
+  },
+  editStudentButton: {
+    alignSelf: 'flex-start',
+    marginBottom: 16,
+    backgroundColor: '#1A73E8',
+    borderRadius: 6,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    minHeight: 44,
+    justifyContent: 'center',
+  },
+  editStudentButtonText: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+  },
+  quickLogRow: {
+    marginTop: 10,
+    flexDirection: 'row',
+    gap: 8,
+    flexWrap: 'wrap',
+  },
+  quickLogButton: {
+    backgroundColor: '#1A73E8',
+    borderRadius: 6,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    minHeight: 44,
+    justifyContent: 'center',
+  },
+  quickLogButtonText: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+  },
+  quickLogButtonSecondary: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#E8EAED',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    minHeight: 44,
+    justifyContent: 'center',
+  },
+  quickLogButtonSecondaryText: {
+    color: '#3C4043',
+    fontWeight: '600',
+  },
+  undoAbsentButton: {
+    marginTop: 8,
+    alignSelf: 'flex-start',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#E8EAED',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    minHeight: 44,
+    justifyContent: 'center',
+  },
+  undoAbsentButtonText: {
+    color: '#3C4043',
+    fontWeight: '600',
+  },
+  card: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 8,
+    padding: 24,
+    borderWidth: 1,
+    borderColor: '#E8EAED',
+    marginBottom: 16,
+    shadowColor: '#000000',
+    shadowOpacity: 0.08,
+    shadowRadius: 3,
+    shadowOffset: { width: 0, height: 1 },
+    elevation: 1,
+  },
+  sectionTitle: {
+    fontSize: 17,
+    fontWeight: '600',
+    marginTop: 16,
+    marginBottom: 8,
+    color: '#202124',
+  },
+  contactButton: {
+    backgroundColor: '#1A73E8',
+    borderRadius: 6,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    marginBottom: 8,
+  },
+  doctorButton: {
+    backgroundColor: '#2F855A',
+  },
+  contactButtonText: {
+    color: '#FFFFFF',
+    fontWeight: '600',
+    fontSize: 14,
+  },
+  allergyAlertCard: {
+    backgroundColor: '#FFF3E8',
+    borderColor: '#E8590C',
+    borderWidth: 2,
+  },
+  noAllergyCard: {
+    backgroundColor: '#E8F5E9',
+    borderColor: '#2F855A',
+  },
+  allergyText: {
+    color: '#7C2D12',
+    fontWeight: '700',
+    fontSize: 16,
+  },
+  vaultText: {
+    fontSize: 15,
+    color: '#3C4043',
+    marginBottom: 7,
+    lineHeight: 24,
+  },
+  vaultToggleButton: {
+    marginTop: 10,
+    backgroundColor: '#1A73E8',
+    borderRadius: 6,
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  vaultToggleButtonText: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    padding: 24,
+  },
+  modalCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 8,
+    padding: 24,
+    borderWidth: 1,
+    borderColor: '#E8EAED',
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: '600',
+    color: '#202124',
+    marginBottom: 8,
+  },
+  modalText: {
+    fontSize: 14,
+    color: '#3C4043',
+    marginBottom: 12,
+    lineHeight: 22,
+  },
+  pinInput: {
+    borderWidth: 1,
+    borderColor: '#E8EAED',
+    borderRadius: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 16,
+    marginBottom: 12,
+  },
+  modalButtonsRow: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 12,
+  },
+  modalButtonSecondary: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#E8EAED',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    minHeight: 44,
+    justifyContent: 'center',
+  },
+  modalButtonSecondaryText: {
+    color: '#3C4043',
+    fontWeight: '600',
+  },
+  modalButtonPrimary: {
+    backgroundColor: '#1A73E8',
+    borderRadius: 6,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    minHeight: 44,
+    justifyContent: 'center',
+  },
+  modalButtonPrimaryText: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+  },
+  formTitle: {
+    fontSize: 24,
+    color: '#202124',
+    fontWeight: '600',
+    marginBottom: 14,
+  },
+  formSectionLabel: {
+    color: '#80868B',
+    fontWeight: '600',
+    marginBottom: 6,
+    marginTop: 4,
+    fontSize: 13,
+  },
+  formInput: {
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E8EAED',
+    borderRadius: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 11,
+    marginBottom: 12,
+    fontSize: 15,
+    color: '#3C4043',
+  },
+  reasonInput: {
+    minHeight: 48,
+    textAlignVertical: 'top',
+  },
+  saveStudentButton: {
+    marginTop: 8,
+    marginBottom: 16,
+    backgroundColor: '#1A73E8',
+    borderRadius: 6,
+    alignItems: 'center',
+    paddingVertical: 12,
+    minHeight: 44,
+    justifyContent: 'center',
+  },
+  saveStudentButtonDisabled: {
+    backgroundColor: '#94A3B8',
+  },
+  saveStudentButtonText: {
+    color: '#FFFFFF',
+    fontWeight: '600',
+    fontSize: 15,
+  },
+  itemHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 12,
+  },
+  statusBadge: {
+    borderRadius: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  statusBadgePresent: {
+    backgroundColor: '#D3F9D8',
+  },
+  statusBadgeLate: {
+    backgroundColor: '#FFF3BF',
+  },
+  statusBadgeAbsent: {
+    backgroundColor: '#FFE3E3',
+  },
+  statusBadgeText: {
+    fontWeight: '600',
+    color: '#3C4043',
+  },
+  actionRow: {
+    flexDirection: 'row',
+    gap: 8,
+    flexWrap: 'wrap',
+  },
+  statusActionButton: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#E8EAED',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    minHeight: 44,
+    justifyContent: 'center',
+  },
+  statusActionButtonSelected: {
+    backgroundColor: '#1A73E8',
+    borderColor: '#1A73E8',
+  },
+  statusActionButtonText: {
+    color: '#3C4043',
+    fontWeight: '600',
+  },
+  chipContainer: {
+    paddingBottom: 10,
+    gap: 8,
+  },
+  chipButton: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#E8EAED',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    marginRight: 8,
+    minHeight: 40,
+    justifyContent: 'center',
+  },
+  chipButtonSelected: {
+    backgroundColor: '#1A73E8',
+    borderColor: '#1A73E8',
+  },
+  chipButtonText: {
+    color: '#3C4043',
+    fontWeight: '600',
+  },
+  selectedActionText: {
+    color: '#FFFFFF',
+  },
+  autocompleteContainer: {
+    marginBottom: 10,
+  },
+  searchInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E8EAED',
+    borderRadius: 6,
+    paddingRight: 8,
+    marginBottom: 16,
+  },
+  autocompleteTextInput: {
+    flex: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    color: '#3C4043',
+  },
+  clearSearchButton: {
+    width: 30,
+    height: 30,
+    borderRadius: 6,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F1F3F4',
+  },
+  clearSearchButtonText: {
+    color: '#80868B',
+    fontSize: 18,
+    fontWeight: '800',
+    lineHeight: 20,
+  },
+  autocompleteResults: {
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E8EAED',
+    borderRadius: 6,
+    marginTop: -4,
+    marginBottom: 8,
+    overflow: 'hidden',
+  },
+  autocompleteScrollArea: {
+    maxHeight: 156,
+  },
+  autocompleteItem: {
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E8EAED',
+    minHeight: 48,
+    justifyContent: 'center',
+  },
+  autocompleteName: {
+    color: '#202124',
+    fontWeight: '600',
+  },
+  autocompleteMeta: {
+    color: '#80868B',
+    marginTop: 2,
+    fontSize: 12,
+  },
+  autocompleteEmpty: {
+    color: '#80868B',
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+  },
+  selectedLearnerText: {
+    color: '#80868B',
+    fontSize: 13,
+    marginTop: -2,
+    marginBottom: 4,
+  },
+  warningCard: {
+    backgroundColor: '#FFF3E8',
+    borderColor: '#E8590C',
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 10,
+  },
+  warningText: {
+    color: '#C2410C',
+    fontWeight: '700',
+  },
+  timelineCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 8,
+    padding: 20,
+    borderWidth: 1,
+    borderColor: '#E8EAED',
+    marginBottom: 12,
+    shadowColor: '#000000',
+    shadowOpacity: 0.08,
+    shadowRadius: 3,
+    shadowOffset: { width: 0, height: 1 },
+    elevation: 1,
+  },
+  timelineMeta: {
+    color: '#80868B',
+    marginTop: 4,
+    marginBottom: 8,
+  },
+  timelineText: {
+    color: '#3C4043',
+    marginBottom: 6,
+    lineHeight: 20,
+  },
+  lockText: {
+    color: '#7C2D12',
+    fontWeight: '700',
+    marginTop: 6,
+  },
+  infoBox: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E8EAED',
+    padding: 12,
+    marginBottom: 16,
+  },
+  infoText: {
+    color: '#3C4043',
+    lineHeight: 22,
+    fontSize: 14,
+  },
+  reportButton: {
+    marginTop: 8,
+    backgroundColor: '#1A73E8',
+    borderRadius: 6,
+    alignItems: 'center',
+    paddingVertical: 12,
+    minHeight: 44,
+    justifyContent: 'center',
+  },
+  complianceFolderCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E8EAED',
+    padding: 14,
+    marginBottom: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  complianceFolderIconWrap: {
+    width: 44,
+    height: 44,
+    borderRadius: 6,
+    backgroundColor: '#F1F3F4',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  complianceFolderIcon: {
+    fontSize: 22,
+  },
+  complianceFolderTextWrap: {
+    flex: 1,
+  },
+  complianceFolderLabel: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#202124',
+    marginBottom: 2,
+  },
+  complianceFolderDesc: {
+    fontSize: 12,
+    color: '#80868B',
+    lineHeight: 16,
+  },
+  complianceFolderChevron: {
+    fontSize: 13,
+    color: '#1A73E8',
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  complianceEmptyState: {
+    alignItems: 'center',
+    paddingVertical: 32,
+  },
+  complianceEmptyIcon: {
+    fontSize: 40,
+    marginBottom: 10,
+  },
+  complianceEmptyText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#3C4043',
+    marginBottom: 6,
+  },
+  complianceEmptyHint: {
+    fontSize: 13,
+    color: '#80868B',
+    textAlign: 'center',
+  },
+  complianceDocCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E8EAED',
+    marginBottom: 12,
+    overflow: 'hidden',
+  },
+  complianceDocMain: {
+    flexDirection: 'row',
+    padding: 14,
+    alignItems: 'flex-start',
+    gap: 10,
+  },
+  complianceDocIcon: {
+    fontSize: 28,
+    marginTop: 2,
+  },
+  complianceDocTextWrap: {
+    flex: 1,
+  },
+  complianceDocName: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#202124',
+    marginBottom: 4,
+  },
+  complianceDocMeta: {
+    fontSize: 12,
+    color: '#80868B',
+    marginBottom: 2,
+  },
+  complianceDocNotes: {
+    fontSize: 12,
+    color: '#3C4043',
+    marginTop: 4,
+    fontStyle: 'italic',
+  },
+  complianceDocActions: {
+    flexDirection: 'row',
+    borderTopWidth: 1,
+    borderTopColor: '#E8EAED',
+  },
+  complianceOpenBtn: {
+    flex: 1,
+    paddingVertical: 10,
+    alignItems: 'center',
+    backgroundColor: '#F8F9FA',
+  },
+  complianceOpenBtnText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#1A73E8',
+  },
+  complianceDeleteBtn: {
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderLeftWidth: 1,
+    borderLeftColor: '#E8EAED',
+  },
+  complianceDeleteBtnText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#3C4043',
+  },
+  complianceUploadSection: {
+    marginTop: 16,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E8EAED',
+    padding: 20,
+  },
+  complianceUploadTitle: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#202124',
+    marginBottom: 10,
+  },
+  complianceUploadBtn: {
+    backgroundColor: '#1A73E8',
+    borderRadius: 6,
+    alignItems: 'center',
+    paddingVertical: 12,
+    minHeight: 44,
+    justifyContent: 'center',
+    marginTop: 4,
+    marginBottom: 8,
+  },
+  complianceUploadBtnText: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+    fontSize: 15,
+  },
+  dateRangeLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#202124',
+    marginTop: 16,
+    marginBottom: 12,
+  },
+  datePickerRow: {
+    flexDirection: 'row',
+    gap: 12,
+    marginBottom: 16,
+  },
+  datePickerColumnContainer: {
+    flex: 1,
+  },
+  datePickerLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#80868B',
+    marginBottom: 6,
+    textAlign: 'center',
+  },
+  datePickerScrollBound: {
+    height: 180,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#E8EAED',
+    overflow: 'hidden',
+    position: 'relative',
+  },
+  datePickerScroll: {
+    flex: 1,
+  },
+  datePickerItem: {
+    fontSize: 16,
+    fontWeight: '500',
+    color: '#80868B',
+  },
+  datePickerItemSelected: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#202124',
+  },
+  datePickerOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    borderTopWidth: 1,
+    borderBottomWidth: 1,
+    borderTopColor: 'rgba(16, 42, 67, 0.1)',
+    borderBottomColor: 'rgba(16, 42, 67, 0.1)',
+    top: 65,
+    height: 50,
+    pointerEvents: 'none',
+    zIndex: 10,
+  },
+  compactDateRangeContainer: {
+    flexDirection: 'row',
+    gap: 12,
+    marginVertical: 16,
+  },
+  compactDateFieldWrapper: {
+    flex: 1,
+  },
+  compactDateLabel: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#80868B',
+    marginBottom: 6,
+  },
+  compactDateField: {
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E8EAED',
+    borderRadius: 6,
+    paddingVertical: 12,
+    paddingHorizontal: 10,
+    justifyContent: 'center',
+  },
+  compactDateFieldText: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#3C4043',
+  },
+  datePickerBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  datePickerModalCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 8,
+    padding: 20,
+    width: '85%',
+    maxWidth: 350,
+  },
+  datePickerModalTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#202124',
+    marginBottom: 16,
+    textAlign: 'center',
+  },
+  compactDatePickerRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 16,
+  },
+  datePickerModalButtonRow: {
+    flexDirection: 'row',
+    gap: 10,
+    justifyContent: 'flex-end',
+  },
+  datePickerModalCancelBtn: {
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 6,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E8EAED',
+  },
+  datePickerModalCancelText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#3C4043',
+  },
+  datePickerModalConfirmBtn: {
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    borderRadius: 6,
+    backgroundColor: '#1A73E8',
+  },
+  datePickerModalConfirmText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#FFFFFF',
+  },
+  compactDatePickerColumnContainer: {
+    flex: 1,
+  },
+  compactDatePickerLabel: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#80868B',
+    marginBottom: 6,
+    textAlign: 'center',
+  },
+  compactDatePickerScrollBound: {
+    height: 120,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#E8EAED',
+    overflow: 'hidden',
+    position: 'relative',
+  },
+  compactDatePickerScroll: {
+    flex: 1,
+  },
+  compactDatePickerItem: {
+    fontSize: 13,
+    fontWeight: '500',
+    color: '#80868B',
+  },
+  compactDatePickerItemSelected: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#202124',
+  },
+  compactDatePickerOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    borderTopWidth: 1,
+    borderBottomWidth: 1,
+    borderTopColor: 'rgba(16, 42, 67, 0.1)',
+    borderBottomColor: 'rgba(16, 42, 67, 0.1)',
+    top: 40,
+    height: 40,
+    pointerEvents: 'none',
+    zIndex: 10,
+  },
+  formTextArea: {
+    minHeight: 96,
+    textAlignVertical: 'top',
+  },
+  successBanner: {
+    backgroundColor: '#DCFCE7',
+    borderRadius: 6,
+    padding: 14,
+    marginBottom: 12,
+    alignItems: 'center',
+  },
+  successBannerText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#166534',
+  },
+  activityFilterRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 16,
+  },
+  activityFilterChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 6,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E8EAED',
+  },
+  activityFilterChipActive: {
+    backgroundColor: '#E8F0FE',
+    borderColor: '#1A73E8',
+  },
+  activityFilterChipText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#3C4043',
+  },
+  activityFilterChipTextActive: {
+    color: '#1A73E8',
+  },
+  activityLogButton: {
+    backgroundColor: '#1A73E8',
+    borderRadius: 6,
+    alignItems: 'center',
+    paddingVertical: 12,
+    minHeight: 44,
+    justifyContent: 'center',
+    marginBottom: 16,
+  },
+  activityLogButtonText: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+    fontSize: 15,
+  },
+  activityCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E8EAED',
+    padding: 20,
+    marginBottom: 12,
+    shadowColor: '#000000',
+    shadowOpacity: 0.08,
+    shadowRadius: 3,
+    shadowOffset: { width: 0, height: 1 },
+    elevation: 1,
+  },
+  activityCardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    marginBottom: 8,
+  },
+  activityCardHeaderText: {
+    flex: 1,
+    marginRight: 8,
+  },
+  activityCardName: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#202124',
+    marginBottom: 2,
+  },
+  activityCardMeta: {
+    fontSize: 13,
+    color: '#80868B',
+  },
+  activityCardBadge: {
+    backgroundColor: '#E8F0FE',
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  activityCardBadgeText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#1A73E8',
+  },
+  activityCardDetail: {
+    fontSize: 14,
+    color: '#3C4043',
+    marginBottom: 4,
+    lineHeight: 22,
+  },
+  activityCardBody: {
+    fontSize: 14,
+    color: '#3C4043',
+    lineHeight: 22,
+    marginTop: 4,
+    marginBottom: 4,
+  },
+  activityCardFooter: {
+    fontSize: 12,
+    color: '#80868B',
+    marginTop: 6,
+  },
+  activityDeleteButton: {
+    marginTop: 10,
+    paddingVertical: 6,
+    paddingHorizontal: 14,
+    borderRadius: 6,
+    backgroundColor: '#FFF5F5',
+    borderWidth: 1,
+    borderColor: '#FECACA',
+  },
+  activityDeleteButtonText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#C92A2A',
+  },
+  activityFilePickButton: {
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E8EAED',
+    borderRadius: 6,
+    alignItems: 'center',
+    paddingVertical: 12,
+    minHeight: 44,
+    justifyContent: 'center',
+    marginBottom: 6,
+  },
+  activityFilePickButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#1A73E8',
+  },
+  activityRemoveFile: {
+    fontSize: 13,
+    color: '#C92A2A',
+    textAlign: 'center',
+    marginBottom: 12,
+  },
+  activityCardActionsRow: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 8,
+    marginTop: 10,
+  },
+  activityEditButton: {
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 6,
+    backgroundColor: '#E8F0FE',
+    borderWidth: 1,
+    borderColor: '#1A73E8',
+    minHeight: 40,
+    justifyContent: 'center',
+  },
+  activityEditButtonText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#1A73E8',
+  },
+  activityDetailRow: {
+    marginBottom: 10,
+  },
+  activityDetailLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#80868B',
+    marginBottom: 2,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  activityDetailValue: {
+    fontSize: 14,
+    color: '#3C4043',
+    lineHeight: 22,
+  },
+});

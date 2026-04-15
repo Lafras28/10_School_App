@@ -67,12 +67,52 @@ function parseArgs(argv) {
 function cellStr(row, col) {
   const v = row.getCell(col).value;
   if (v === null || v === undefined) return '';
-  if (typeof v === 'object' && v.text) return String(v.text).trim();
+  if (typeof v === 'object') {
+    if (typeof v.text === 'string') return String(v.text).trim();
+    if (Array.isArray(v.richText)) {
+      return v.richText.map((part) => String(part?.text || '')).join('').trim();
+    }
+    if (v.result !== undefined && v.result !== null) return String(v.result).trim();
+  }
   return String(v).trim();
 }
 
 function yesNo(val) {
   return String(val || '').trim().toUpperCase() !== 'NO';
+}
+
+function normalizeHeader(val) {
+  return String(val || '')
+    .toLowerCase()
+    .replace(/\*/g, '')
+    .replace(/[^a-z0-9]+/g, '')
+    .trim();
+}
+
+function normalizePhoneNumber(raw) {
+  const original = String(raw || '').trim();
+  if (!original) return '';
+
+  // Keep only numeric content (and a leading + intent) for robust spreadsheet input cleanup.
+  const startsWithPlus = original.startsWith('+');
+  let digits = original.replace(/\D/g, '');
+  if (!digits) return '';
+
+  // 00 prefix is often used instead of + in international format.
+  if (original.startsWith('00') && digits.startsWith('00')) {
+    digits = digits.slice(2);
+    return `+${digits}`;
+  }
+
+  if (startsWithPlus) return `+${digits}`;
+
+  // South African-friendly normalization.
+  if (digits.startsWith('27') && digits.length >= 11) return `+${digits}`;
+  if (digits.startsWith('0') && digits.length === 10) return `+27${digits.slice(1)}`;
+  if (digits.length === 9) return `+27${digits}`;
+
+  // Fallback: keep cleaned local digits if pattern is unknown.
+  return digits;
 }
 
 function normalizeId(val, fallback = 'school') {
@@ -126,7 +166,7 @@ function readSchoolInfo(wb) {
   // Data rows start at row 6 (after title, note, blank, header)
   const fields = {};
   ws.eachRow((row, rowNum) => {
-    if (rowNum < 6) return;
+    if (rowNum < 5) return;
     const field = cellStr(row, 1);
     const value = cellStr(row, 2);
     if (!field) return;
@@ -184,33 +224,77 @@ function readStudents(wb) {
 
   const students = [];
   // Header is row 5; data from row 6
+  const headerRow = ws.getRow(5);
+  const headerMap = new Map();
+  headerRow.eachCell({ includeEmpty: true }, (cell, colNum) => {
+    const normalized = normalizeHeader(cell.value);
+    if (normalized) headerMap.set(normalized, colNum);
+  });
+
+  const valueByHeader = (row, ...keys) => {
+    for (const key of keys) {
+      const col = headerMap.get(normalizeHeader(key));
+      if (!col) continue;
+      const value = cellStr(row, col);
+      if (value) return value;
+    }
+    return '';
+  };
+
   ws.eachRow((row, rowNum) => {
     if (rowNum < 6) return;
-    const firstName  = cellStr(row, 1);
-    const lastName   = cellStr(row, 2);
-    const className  = cellStr(row, 3);
+    const childId    = valueByHeader(row, 'Child ID', 'ID', 'Student ID');
+    const firstName  = valueByHeader(row, '* First Name', 'First Name');
+    const lastName   = valueByHeader(row, '* Last Name', 'Last Name');
+    const className  = valueByHeader(row, '* Class Name', 'Class Name');
     if (!firstName && !lastName) return;
     if (!firstName || !lastName) { console.warn(`  Skipping student row ${rowNum}: missing name`); return; }
 
-    const allergies       = cellStr(row, 4)  || 'No known allergies';
-    const ec1Name         = cellStr(row, 5);
-    const ec1Number       = cellStr(row, 6);
-    const ec2Name         = cellStr(row, 7);
-    const ec2Number       = cellStr(row, 8);
-    const medicalAidName  = cellStr(row, 9);
-    const medicalAidNumber= cellStr(row, 10);
-    const doctorContact   = cellStr(row, 11);
-    const medicalPin      = cellStr(row, 12);
+    const allergies           = valueByHeader(row, 'Allergies') || 'No known allergies';
+    const ec1Name             = valueByHeader(row, '* EC1 Name', 'EC1 Name');
+    const ec1Number           = normalizePhoneNumber(valueByHeader(row, '* EC1 Number', 'EC1 Number'));
+    const ec1Email            = valueByHeader(row, 'EC1 Email');
+    const ec2Name             = valueByHeader(row, 'EC2 Name');
+    const ec2Number           = normalizePhoneNumber(valueByHeader(row, 'EC2 Number'));
+    const ec3Name             = valueByHeader(row, 'EC3 Name');
+    const ec3Number           = normalizePhoneNumber(valueByHeader(row, 'EC3 Number'));
+    const ec4Name             = valueByHeader(row, 'EC4 Name');
+    const ec4Number           = normalizePhoneNumber(valueByHeader(row, 'EC4 Number'));
+    const medicalAidName      = valueByHeader(row, 'Medical Aid Name');
+    const medicalAidPlan      = valueByHeader(row, 'Medical Aid Plan');
+    const medicalAidNumber    = valueByHeader(row, 'Medical Aid No.', 'Medical Aid No', 'Medical Aid Number');
+    const mainMemberName      = valueByHeader(row, 'Main Member Name');
+    const mainMemberIdNumber  = valueByHeader(row, 'Main Member ID No.', 'Main Member ID Number');
+    const childDependencyCode = valueByHeader(row, 'Child Dependency Code');
+    const doctorContact       = valueByHeader(row, 'Doctor Contact');
 
     if (!ec1Name || !ec1Number) {
       console.warn(`  Warning: student ${firstName} ${lastName} is missing Emergency Contact 1 — added with placeholder.`);
     }
 
     const emergencyContacts = [];
-    if (ec1Name || ec1Number) emergencyContacts.push({ name: ec1Name || 'Contact 1', number: ec1Number || '' });
+    if (ec1Name || ec1Number || ec1Email) {
+      emergencyContacts.push({ name: ec1Name || 'Contact 1', number: ec1Number || '', email: ec1Email || '' });
+    }
     if (ec2Name || ec2Number) emergencyContacts.push({ name: ec2Name || 'Contact 2', number: ec2Number || '' });
+    if (ec3Name || ec3Number) emergencyContacts.push({ name: ec3Name || 'Contact 3', number: ec3Number || '' });
+    if (ec4Name || ec4Number) emergencyContacts.push({ name: ec4Name || 'Contact 4', number: ec4Number || '' });
 
-    students.push({ firstName, lastName, className, allergies, emergencyContacts, medicalAidName, medicalAidNumber, doctorContact, medicalPin });
+    students.push({
+      childId,
+      firstName,
+      lastName,
+      className,
+      allergies,
+      emergencyContacts,
+      medicalAidName,
+      medicalAidPlan,
+      medicalAidNumber,
+      mainMemberName,
+      mainMemberIdNumber,
+      childDependencyCode,
+      doctorContact,
+    });
   });
 
   return students;
@@ -301,7 +385,13 @@ async function main() {
   // Staff
   for (const member of staff) {
     const uid = await upsertAuthUser(auth, member.email, member.password, member.displayName, dryRun);
-    const role = ['teacher','viewer','parent'].includes(member.role) ? member.role : 'teacher';
+    const normalizedRole = String(member.role || '').trim().toLowerCase();
+    const roleAliases = {
+      admin: 'principal',
+      administrator: 'principal',
+      principal: 'principal',
+    };
+    const role = roleAliases[normalizedRole] || (['teacher', 'viewer', 'parent'].includes(normalizedRole) ? normalizedRole : 'teacher');
     writes.push({
       ref: db.collection(USERS_COL).doc(uid),
       data: {
@@ -320,22 +410,38 @@ async function main() {
   }
 
   // Students
+  const usedStudentIds = new Set();
   students.forEach((student, idx) => {
-    const sid = `${schoolInfo.id}-st-${padNum(idx + 1)}`;
+    const normalizedProvidedId = normalizeId(student.childId || '', '');
+    let sid = normalizedProvidedId
+      ? `${schoolInfo.id}-st-${normalizedProvidedId}`
+      : `${schoolInfo.id}-st-${padNum(idx + 1)}`;
+
+    if (usedStudentIds.has(sid)) {
+      const fallbackSid = `${schoolInfo.id}-st-${padNum(idx + 1)}`;
+      console.warn(`  Warning: duplicate Child ID "${student.childId}". Using generated ID ${fallbackSid} instead.`);
+      sid = fallbackSid;
+    }
+    usedStudentIds.add(sid);
+
     writes.push({
       ref: db.collection(SCHOOLS_COL).doc(schoolInfo.id).collection('students').doc(sid),
       data: {
         schoolId: schoolInfo.id,
         id: sid,
+        childId: student.childId,
         firstName:        student.firstName,
         lastName:         student.lastName,
         className:        student.className,
         emergencyContacts: student.emergencyContacts,
         allergies:        student.allergies,
         medicalAidName:   student.medicalAidName,
+        medicalAidPlan:   student.medicalAidPlan,
         medicalAidNumber: student.medicalAidNumber,
+        mainMemberName:   student.mainMemberName,
+        mainMemberIdNumber: student.mainMemberIdNumber,
+        childDependencyCode: student.childDependencyCode,
         doctorContact:    student.doctorContact,
-        medicalPin:       student.medicalPin,
       },
     });
     console.log(`  Queued: ${student.firstName} ${student.lastName} (${sid}) → ${student.className}`);

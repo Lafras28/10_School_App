@@ -39,7 +39,14 @@ service cloud.firestore {
         )
       );
 
-      allow create: if signedIn() && uid == request.auth.uid;
+      allow create: if signedIn() && (
+        uid == request.auth.uid
+        || (
+          isPrincipal()
+          && request.resource != null
+          && request.resource.data.schoolId == mySchoolId()
+        )
+      );
 
       allow update: if signedIn() && (
         uid == request.auth.uid
@@ -51,7 +58,7 @@ service cloud.firestore {
         )
       );
 
-      allow delete: if false;
+      allow delete: if signedIn() && isPrincipal() && resource != null && resource.data.schoolId == mySchoolId();
     }
 
     match /schools/{schoolId} {

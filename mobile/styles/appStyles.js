@@ -191,6 +191,17 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontWeight: '700',
   },
+  studentDirectoryHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 8,
+  },
+  addStudentButtonInline: {
+    marginBottom: 0,
+    alignSelf: 'auto',
+  },
   moduleCard: {
     marginTop: 8,
     backgroundColor: '#FFFFFF',
@@ -289,6 +300,7 @@ const styles = StyleSheet.create({
     elevation: 1,
   },
   sectionCard: {
+    position: 'relative',
     backgroundColor: '#FFFFFF',
     borderRadius: 8,
     padding: 20,
@@ -595,6 +607,14 @@ const styles = StyleSheet.create({
   statusBadgeText: {
     fontWeight: '600',
     color: '#3C4043',
+  },
+  statusDot: {
+    position: 'absolute',
+    top: 14,
+    right: 14,
+    width: 12,
+    height: 12,
+    borderRadius: 6,
   },
   actionRow: {
     flexDirection: 'row',

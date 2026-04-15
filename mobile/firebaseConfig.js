@@ -1,5 +1,6 @@
-import { getApp, getApps, initializeApp } from 'firebase/app';
+import { deleteApp, getApp, getApps, initializeApp } from 'firebase/app';
 import {
+  createUserWithEmailAndPassword,
   EmailAuthProvider,
   getAuth,
   onAuthStateChanged,
@@ -8,6 +9,7 @@ import {
   signInWithEmailAndPassword,
   signOut,
   updateEmail,
+  updateProfile,
   updatePassword,
 } from 'firebase/auth';
 import { collection, deleteDoc, doc, getDoc, getDocs, getFirestore, onSnapshot, query, setDoc, where, writeBatch } from 'firebase/firestore';
@@ -108,6 +110,10 @@ function buildDefaultSchoolFeatures(overrides = {}) {
   };
 }
 
+function normalizeVaultPassword(value) {
+  return String(value || '').trim();
+}
+
 function buildDefaultSchoolName(schoolId = DEFAULT_SCHOOL_ID) {
   const cleaned = String(schoolId || DEFAULT_SCHOOL_ID).replace(/[-_]+/g, ' ').trim();
   return cleaned ? cleaned.replace(/\b\w/g, (char) => char.toUpperCase()) : 'School';
@@ -131,6 +137,7 @@ async function fetchSchoolConfigById(schoolId) {
       id: normalizedSchoolId,
       name: buildDefaultSchoolName(normalizedSchoolId),
       features: buildDefaultSchoolFeatures(),
+      medicalVaultPassword: '',
       principalUserUid: '',
     };
   }
@@ -140,6 +147,7 @@ async function fetchSchoolConfigById(schoolId) {
     id: normalizedSchoolId,
     name: String(data?.name || buildDefaultSchoolName(normalizedSchoolId)).trim(),
     features: buildDefaultSchoolFeatures(data?.features || {}),
+    medicalVaultPassword: normalizeVaultPassword(data?.medicalVaultPassword),
     principalUserUid: String(data?.principalUserUid || '').trim(),
   };
 }
@@ -179,6 +187,10 @@ function buildAccessProfile(user, data = {}) {
     schoolFeatures: buildDefaultSchoolFeatures(data?.schoolFeatures || {}),
     role,
     permissions,
+    isActive: data?.isActive !== false,
+    assignedClasses: Array.isArray(data?.assignedClasses)
+      ? data.assignedClasses.map((value) => String(value || '').trim()).filter(Boolean)
+      : [],
     linkedStudentIds: Array.isArray(data?.linkedStudentIds)
       ? data.linkedStudentIds.map((value) => String(value || '').trim()).filter(Boolean)
       : [],
@@ -211,6 +223,7 @@ export async function ensureUserAccessProfile(user) {
       name: buildDefaultSchoolName(schoolId),
       principalUserUid: provisionalProfile.role === 'principal' ? provisionalProfile.uid : '',
       features: buildDefaultSchoolFeatures(),
+      medicalVaultPassword: '',
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     }, { merge: true });
@@ -263,6 +276,10 @@ export async function signInUser(email, password) {
   const normalizedPassword = String(password || '').trim();
   const credentials = await signInWithEmailAndPassword(auth, normalizedEmail, normalizedPassword);
   const accessProfile = await ensureUserAccessProfile(credentials.user);
+  if (accessProfile?.isActive === false) {
+    await signOut(auth);
+    throw new Error('This account has been removed. Please contact your principal.');
+  }
   return {
     user: credentials.user,
     accessProfile,
@@ -284,6 +301,11 @@ export function listenToAuthChanges(callback) {
 
     try {
       const accessProfile = await ensureUserAccessProfile(user);
+      if (accessProfile?.isActive === false) {
+        await signOut(auth);
+        callback(null, null);
+        return;
+      }
       activeSchoolId = accessProfile.schoolId;
       callback(user, accessProfile);
 
@@ -390,6 +412,7 @@ export async function fetchUserAccessProfiles() {
         uid: documentSnapshot.id,
       });
     })
+    .filter((profile) => profile?.isActive !== false)
     .sort((left, right) => String(left.displayName || left.email || '').localeCompare(String(right.displayName || right.email || '')));
 }
 
@@ -414,6 +437,12 @@ export async function updateUserAccessProfile(uid, updates = {}) {
     ...updates,
     schoolId: normalizeSchoolId(existingData?.schoolId || activeSchoolId),
     role,
+    isActive: typeof updates?.isActive === 'boolean' ? updates.isActive : (existingData?.isActive !== false),
+    assignedClasses: Array.isArray(updates?.assignedClasses)
+      ? updates.assignedClasses.map((value) => String(value || '').trim()).filter(Boolean)
+      : (Array.isArray(existingData?.assignedClasses)
+        ? existingData.assignedClasses.map((value) => String(value || '').trim()).filter(Boolean)
+        : []),
     permissions: nextPermissions,
     updatedAt: new Date().toISOString(),
   };
@@ -448,13 +477,18 @@ function normalizeStudent(student = {}, fallbackId = '') {
   return {
     schoolId: normalizeSchoolId(student?.schoolId || activeSchoolId),
     id: studentId,
+    childId: String(student?.childId || '').trim(),
     firstName: String(student?.firstName || '').trim(),
     lastName: String(student?.lastName || '').trim(),
     className: String(student?.className || '').trim() || 'Sunshine Bunnies',
     emergencyContacts,
     allergies: String(student?.allergies || 'No known allergies').trim(),
     medicalAidName: String(student?.medicalAidName || '').trim(),
+    medicalAidPlan: String(student?.medicalAidPlan || '').trim(),
     medicalAidNumber: String(student?.medicalAidNumber || '').trim(),
+    mainMemberName: String(student?.mainMemberName || '').trim(),
+    mainMemberIdNumber: String(student?.mainMemberIdNumber || '').trim(),
+    childDependencyCode: String(student?.childDependencyCode || '').trim(),
     doctorContact: String(student?.doctorContact || '').trim(),
     medicalPin: String(student?.medicalPin || '').trim(),
   };
@@ -946,4 +980,83 @@ export async function updateCurrentSchoolFeatures(featureUpdates = {}, principal
   }, { merge: true });
 
   return fetchSchoolConfigById(schoolId);
+}
+
+export async function updateCurrentSchoolMedicalVaultPassword(nextPassword = '', principalUid = '') {
+  const schoolId = normalizeSchoolId(activeSchoolId);
+  const currentConfig = await fetchSchoolConfigById(schoolId);
+  const normalizedPassword = normalizeVaultPassword(nextPassword);
+
+  await setDoc(doc(db, SCHOOLS_COLLECTION, schoolId), {
+    id: schoolId,
+    name: currentConfig.name || buildDefaultSchoolName(schoolId),
+    principalUserUid: String(principalUid || currentConfig.principalUserUid || '').trim(),
+    medicalVaultPassword: normalizedPassword,
+    updatedAt: new Date().toISOString(),
+  }, { merge: true });
+
+  return fetchSchoolConfigById(schoolId);
+}
+
+export async function createManagedUserAccount(payload = {}) {
+  const email = String(payload?.email || '').trim().toLowerCase();
+  const password = String(payload?.password || '').trim();
+  const displayName = String(payload?.displayName || '').trim() || email;
+  const role = String(payload?.role || 'teacher').trim().toLowerCase();
+  const allowedRoles = new Set(['principal', 'teacher', 'viewer', 'parent']);
+  const safeRole = allowedRoles.has(role) ? role : 'teacher';
+  const assignedClasses = Array.isArray(payload?.assignedClasses)
+    ? payload.assignedClasses.map((value) => String(value || '').trim()).filter(Boolean)
+    : [];
+
+  if (!email) {
+    throw new Error('Email is required.');
+  }
+  if (!password || password.length < 6) {
+    throw new Error('Temporary password must be at least 6 characters.');
+  }
+
+  const secondaryAppName = `provision-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const secondaryApp = initializeApp(firebaseConfig, secondaryAppName);
+  const secondaryAuth = getAuth(secondaryApp);
+
+  try {
+    const credentials = await createUserWithEmailAndPassword(secondaryAuth, email, password);
+    if (displayName) {
+      await updateProfile(credentials.user, { displayName });
+    }
+
+    const profile = {
+      uid: credentials.user.uid,
+      email,
+      displayName,
+      schoolId: normalizeSchoolId(activeSchoolId),
+      schoolFeatures: buildDefaultSchoolFeatures(),
+      role: safeRole,
+      permissions: getDefaultPermissionsForRole(safeRole),
+      isActive: true,
+      assignedClasses,
+      linkedStudentIds: [],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    await setDoc(doc(db, USERS_COLLECTION, credentials.user.uid), profile, { merge: true });
+    return buildAccessProfile({ uid: credentials.user.uid, email, displayName }, profile);
+  } finally {
+    try {
+      await signOut(secondaryAuth);
+    } catch {
+      // no-op
+    }
+    await deleteApp(secondaryApp);
+  }
+}
+
+export async function deleteUserAccessProfile(uid) {
+  const normalizedUid = String(uid || '').trim();
+  if (!normalizedUid) {
+    throw new Error('User id is required to remove a user.');
+  }
+  await deleteDoc(doc(db, USERS_COLLECTION, normalizedUid));
 }
