@@ -678,6 +678,14 @@ export async function saveStudentToFirestore(student, existingId = '') {
   return normalized;
 }
 
+export async function deleteStudentFromFirestore(studentId = '') {
+  const id = String(studentId || '').trim();
+  if (!id) {
+    throw new Error('Student ID is required to delete a student.');
+  }
+  await deleteDoc(schoolDocRef(activeSchoolId, STUDENTS_COLLECTION, id));
+}
+
 export async function saveAttendanceToFirestore(registerDate, entry, status, reason = '') {
   const normalizedStatus = String(status || entry?.status || 'Present').trim() || 'Present';
   const keepParentFlag = normalizedStatus === 'Absent' && Boolean(entry?.parentReportedAbsent);

@@ -24,6 +24,7 @@ import {
   createManagedUserAccount,
   deleteActivityFromFirestore,
   deleteComplianceDocument,
+  deleteStudentFromFirestore,
   fetchAllAttendanceFromFirestore,
   fetchActivitiesFromFirestore,
   fetchAttendanceFromFirestore,
@@ -690,7 +691,6 @@ function LoginScreen({ onLogin, isBusy }) {
         {forgotError ? <Text style={styles.loginErrorText}>{forgotError}</Text> : null}
 
         {errorMessage ? <Text style={styles.errorText}>{errorMessage}</Text> : null}
-        <Text style={styles.loginHint}>Use Firebase Auth accounts. Principal/admin emails can be given edit access, while teachers can stay view-only.</Text>
       </View>
     </SafeAreaView>
   );
@@ -1021,32 +1021,32 @@ export default function App() {
             headerTitleStyle: { fontWeight: '700' },
           }}
         >
-          <Stack.Screen
-            name="Home"
-            options={{ title: 'Greenhill' }}
-          >
-            {(props) => <HomeScreen {...props} onLogout={handleLogout} loginIdentity={loginIdentity} />}
-          </Stack.Screen>
-          <Stack.Screen
-            name="ProfileSettings"
-            component={ProfileSettingsScreen}
-            options={{ title: 'Profile & Settings' }}
-          />
-          <Stack.Screen
-            name="SchoolSettings"
-            component={SchoolSettingsScreen}
-            options={{ title: 'School Settings' }}
-          />
-          <Stack.Screen
-            name="ManageUsers"
-            component={ManageUsersScreen}
-            options={{ title: 'Staff Access' }}
-          />
-          <Stack.Screen
-            name="StudentDirectory"
-            component={StudentDirectoryScreen}
-            options={{ title: 'Students' }}
-          />
+        <Stack.Screen
+          name="Home"
+          options={{ title: 'Greenhill' }}
+        >
+          {(props) => <HomeScreen {...props} onLogout={handleLogout} loginIdentity={loginIdentity} />}
+        </Stack.Screen>
+        <Stack.Screen
+          name="ProfileSettings"
+          component={ProfileSettingsScreen}
+          options={{ title: 'Profile & Settings' }}
+        />
+        <Stack.Screen
+          name="SchoolSettings"
+          component={SchoolSettingsScreen}
+          options={{ title: 'School Settings' }}
+        />
+        <Stack.Screen
+          name="ManageUsers"
+          component={ManageUsersScreen}
+          options={{ title: 'Staff Access' }}
+        />
+        <Stack.Screen
+          name="StudentDirectory"
+          component={StudentDirectoryScreen}
+          options={{ title: 'Students' }}
+        />
           <Stack.Screen
             name="EmergencyProfile"
             component={EmergencyProfileScreen}
@@ -1077,7 +1077,7 @@ export default function App() {
           <Stack.Screen
             name="ComplianceDocumentFolder"
             component={ComplianceDocumentFolderScreen}
-            options={({ route }) => ({ title: route.params?.folder?.label || 'Documents' })}
+            options={({ route }) => ({ title: route.params?.folder?.label || 'Documents' })}}
           />
           <Stack.Screen
             name="Activities"
@@ -1118,6 +1118,7 @@ function HomeScreen({ navigation, onLogout, loginIdentity }) {
     || canExportReports;
   const canOpenCompliance = canExportReports || hasPermission(accessProfile, 'canManageUsers');
   const [isMenuVisible, setIsMenuVisible] = useState(false);
+  const schoolName = String(accessProfile?.schoolName || DEFAULT_SCHOOL_NAME).trim();
 
   const closeMenu = () => {
     setIsMenuVisible(false);
@@ -1138,7 +1139,7 @@ function HomeScreen({ navigation, onLogout, loginIdentity }) {
       <ScrollView contentContainerStyle={styles.formContainer}>
         <View style={styles.homeHeaderRow}>
           <View style={styles.homeHeaderTextWrap}>
-            <Text style={styles.title}>Greenhill</Text>
+            <Text style={styles.title}>{schoolName}</Text>
           </View>
 
           <TouchableOpacity style={styles.burgerButton} onPress={() => setIsMenuVisible(true)}>
@@ -1530,6 +1531,7 @@ function ManageUsersScreen({ navigation }) {
   const [errorMessage, setErrorMessage] = useState('');
   const [savingUid, setSavingUid] = useState('');
   const [isCreatingUser, setIsCreatingUser] = useState(false);
+  const [isShowingAddUserModal, setIsShowingAddUserModal] = useState(false);
   const [newUserName, setNewUserName] = useState('');
   const [newUserEmail, setNewUserEmail] = useState('');
   const [newUserPassword, setNewUserPassword] = useState('123456');
@@ -1598,6 +1600,7 @@ function ManageUsersScreen({ navigation }) {
     setNewUserPassword('123456');
     setNewUserRole('teacher');
     setNewUserAssignedClasses([]);
+    setIsShowingAddUserModal(false);
   };
 
   const handleCreateUser = async () => {
@@ -1626,6 +1629,14 @@ function ManageUsersScreen({ navigation }) {
     } finally {
       setIsCreatingUser(false);
     }
+  };
+
+  const handleOpenAddUserModal = () => {
+    setIsShowingAddUserModal(true);
+  };
+
+  const handleCloseAddUserModal = () => {
+    resetNewUserForm();
   };
 
   const handleRoleChange = async (userProfile, nextRole) => {
@@ -1751,6 +1762,7 @@ function ManageUsersScreen({ navigation }) {
 
   const handleRemoveUser = (userProfile) => {
     if (!canManageUsers || !userProfile?.uid) {
+      Alert.alert('Error', 'Cannot remove this user.');
       return;
     }
     if (userProfile.uid === accessProfile.uid) {
@@ -1779,8 +1791,10 @@ function ManageUsersScreen({ navigation }) {
                 isActive: false,
               });
               setUserProfiles((currentUsers) => currentUsers.filter((currentUser) => currentUser.uid !== userProfile.uid));
+              Alert.alert('Removed', `${userProfile.displayName || userProfile.email} has been removed from staff access.`);
             } catch (error) {
-              Alert.alert('Remove Failed', error.message || 'Could not remove this user.');
+              console.error('Remove user error:', error);
+              Alert.alert('Remove Failed', error.message || 'Could not remove this user. Please try again.');
             } finally {
               setSavingUid('');
             }
@@ -1801,80 +1815,12 @@ function ManageUsersScreen({ navigation }) {
         </View>
 
         {canManageUsers ? (
-          <View style={styles.sectionCard}>
-            <Text style={styles.formSectionLabel}>Add New User</Text>
-
-            <TextInput
-              style={styles.formInput}
-              placeholder="Display Name"
-              placeholderTextColor={FORM_PLACEHOLDER_COLOR}
-              value={newUserName}
-              onChangeText={setNewUserName}
-            />
-            <TextInput
-              style={styles.formInput}
-              placeholder="Email"
-              placeholderTextColor={FORM_PLACEHOLDER_COLOR}
-              value={newUserEmail}
-              onChangeText={setNewUserEmail}
-              autoCapitalize="none"
-              keyboardType="email-address"
-            />
-            <TextInput
-              style={styles.formInput}
-              placeholder="Temporary Password"
-              placeholderTextColor={FORM_PLACEHOLDER_COLOR}
-              value={newUserPassword}
-              onChangeText={setNewUserPassword}
-              secureTextEntry
-            />
-
-            <Text style={styles.formSectionLabel}>Role</Text>
-            <View style={styles.actionRow}>
-              {ROLE_OPTIONS.map((roleOption) => (
-                <TouchableOpacity
-                  key={`new-user-${roleOption}`}
-                  style={[styles.chipButton, newUserRole === roleOption && styles.chipButtonSelected]}
-                  onPress={() => setNewUserRole(roleOption)}
-                  disabled={isCreatingUser}
-                >
-                  <Text style={[styles.chipButtonText, newUserRole === roleOption && styles.selectedActionText]}>
-                    {formatRoleLabel(roleOption)}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-
-            {newUserRole !== 'parent' ? (
-              <>
-                <Text style={styles.formSectionLabel}>Assigned Classes</Text>
-                <View style={styles.actionRow}>
-                  {classOptions.map((className) => {
-                    const selected = newUserAssignedClasses.includes(className);
-                    return (
-                      <TouchableOpacity
-                        key={`new-user-class-${className}`}
-                        style={[styles.chipButton, selected && styles.chipButtonSelected]}
-                        onPress={() => handleToggleNewUserClass(className)}
-                        disabled={isCreatingUser}
-                      >
-                        <Text style={[styles.chipButtonText, selected && styles.selectedActionText]}>{className}</Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </View>
-                <Text style={styles.tapHint}>Class assignment is stored for future restricted class access. Teachers currently still view all learners.</Text>
-              </>
-            ) : null}
-
-            <TouchableOpacity
-              style={[styles.saveStudentButton, isCreatingUser && styles.saveStudentButtonDisabled]}
-              onPress={handleCreateUser}
-              disabled={isCreatingUser}
-            >
-              <Text style={styles.saveStudentButtonText}>{isCreatingUser ? 'Creating...' : 'Create User'}</Text>
-            </TouchableOpacity>
-          </View>
+          <TouchableOpacity
+            style={styles.saveStudentButton}
+            onPress={handleOpenAddUserModal}
+          >
+            <Text style={styles.saveStudentButtonText}>+ Add New User</Text>
+          </TouchableOpacity>
         ) : null}
 
         {!canManageUsers ? (
@@ -1890,7 +1836,9 @@ function ManageUsersScreen({ navigation }) {
           <Text style={styles.statusText}>No staff profiles found yet. Ask each user to log in once after their Firebase Auth account is created.</Text>
         ) : null}
 
-        {userProfiles.map((userProfile) => (
+        {userProfiles
+          .filter((userProfile) => userProfile.uid !== accessProfile.uid)
+          .map((userProfile) => (
           <View key={userProfile.uid} style={styles.sectionCard}>
             <Text style={styles.studentName}>{userProfile.displayName || userProfile.email || 'Staff Member'}</Text>
             <Text style={styles.studentClassText}>
@@ -1985,6 +1933,97 @@ function ManageUsersScreen({ navigation }) {
             {savingUid === userProfile.uid ? <Text style={styles.statusText}>Saving access changes...</Text> : null}
           </View>
         ))}
+
+        <Modal
+          visible={isShowingAddUserModal}
+          transparent
+          animationType="fade"
+          onRequestClose={handleCloseAddUserModal}
+        >
+          <View style={styles.modalBackdrop}>
+            <View style={styles.modalCard}>
+              <Text style={styles.modalTitle}>Add New User</Text>
+
+              <ScrollView keyboardShouldPersistTaps="handled" style={styles.modalScrollContent}>
+                <TextInput
+                  style={styles.formInput}
+                  placeholder="Display Name"
+                  placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+                  value={newUserName}
+                  onChangeText={setNewUserName}
+                />
+                <TextInput
+                  style={styles.formInput}
+                  placeholder="Email"
+                  placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+                  value={newUserEmail}
+                  onChangeText={setNewUserEmail}
+                  autoCapitalize="none"
+                  keyboardType="email-address"
+                />
+                <TextInput
+                  style={styles.formInput}
+                  placeholder="Temporary Password"
+                  placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+                  value={newUserPassword}
+                  onChangeText={setNewUserPassword}
+                  secureTextEntry
+                />
+
+                <Text style={styles.formSectionLabel}>Role</Text>
+                <View style={styles.actionRow}>
+                  {ROLE_OPTIONS.map((roleOption) => (
+                    <TouchableOpacity
+                      key={`modal-new-user-${roleOption}`}
+                      style={[styles.chipButton, newUserRole === roleOption && styles.chipButtonSelected]}
+                      onPress={() => setNewUserRole(roleOption)}
+                      disabled={isCreatingUser}
+                    >
+                      <Text style={[styles.chipButtonText, newUserRole === roleOption && styles.selectedActionText]}>
+                        {formatRoleLabel(roleOption)}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+
+                {newUserRole !== 'parent' ? (
+                  <>
+                    <Text style={styles.formSectionLabel}>Assigned Classes</Text>
+                    <View style={styles.actionRow}>
+                      {classOptions.map((className) => {
+                        const selected = newUserAssignedClasses.includes(className);
+                        return (
+                          <TouchableOpacity
+                            key={`modal-new-user-class-${className}`}
+                            style={[styles.chipButton, selected && styles.chipButtonSelected]}
+                            onPress={() => handleToggleNewUserClass(className)}
+                            disabled={isCreatingUser}
+                          >
+                            <Text style={[styles.chipButtonText, selected && styles.selectedActionText]}>{className}</Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+                    <Text style={styles.tapHint}>Class assignment is stored for future restricted class access. Teachers currently still view all learners.</Text>
+                  </>
+                ) : null}
+              </ScrollView>
+
+              <View style={styles.modalButtonsRow}>
+                <TouchableOpacity style={styles.modalButtonSecondary} onPress={handleCloseAddUserModal} disabled={isCreatingUser}>
+                  <Text style={styles.modalButtonSecondaryText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.modalButtonPrimary, isCreatingUser && styles.saveStudentButtonDisabled]}
+                  onPress={handleCreateUser}
+                  disabled={isCreatingUser}
+                >
+                  <Text style={styles.modalButtonPrimaryText}>{isCreatingUser ? 'Creating...' : 'Create User'}</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </Modal>
       </ScrollView>
     </SafeAreaView>
   );
@@ -2207,13 +2246,15 @@ function StudentClassFolderScreen({ route, navigation }) {
 
   const visibleStudents = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
-    return students.filter((student) => {
-      const matchesClass = getClassroomName(student) === className;
-      const allowedStudent = canAccessStudent(accessProfile, student);
-      const studentName = getStudentFullName(student).toLowerCase();
-      const studentId = String(student.id || '').toLowerCase();
-      return allowedStudent && matchesClass && (!query || studentName.includes(query) || studentId.includes(query));
-    });
+    return students
+      .filter((student) => {
+        const matchesClass = getClassroomName(student) === className;
+        const allowedStudent = canAccessStudent(accessProfile, student);
+        const studentName = getStudentFullName(student).toLowerCase();
+        const studentId = String(student.id || '').toLowerCase();
+        return allowedStudent && matchesClass && (!query || studentName.includes(query) || studentId.includes(query));
+      })
+      .sort((a, b) => getStudentFullName(a).localeCompare(getStudentFullName(b)));
   }, [students, searchQuery, className, accessProfile]);
 
   const attendanceByStudentId = useMemo(
@@ -2595,11 +2636,13 @@ function EmergencyProfileScreen({ route, navigation }) {
   const accessProfile = useAccessProfile();
   const canEditStudents = hasPermission(accessProfile, 'canEditStudents');
   const canEditOwnChildMedicalInfo = hasPermission(accessProfile, 'canEditOwnChildMedicalInfo');
+  const canExportReports = hasPermission(accessProfile, 'canExportReports');
   const isParentAccount = isParentRole(accessProfile);
   const { student } = route.params;
   const [isMedicalAidVisible, setIsMedicalAidVisible] = useState(false);
   const [isPinModalVisible, setIsPinModalVisible] = useState(false);
   const [pinInput, setPinInput] = useState('');
+  const [pinError, setPinError] = useState('');
   const [historyLoading, setHistoryLoading] = useState(false);
   const [parentAbsentSaving, setParentAbsentSaving] = useState(false);
   const [showParentAbsentDatePicker, setShowParentAbsentDatePicker] = useState(false);
@@ -2756,17 +2799,19 @@ function EmergencyProfileScreen({ route, navigation }) {
   const handleVerifyPin = () => {
     const expectedPin = String(schoolMedicalVaultPassword || student.medicalPin || '1234').trim();
     if (pinInput !== expectedPin) {
-      Alert.alert('Access Denied', 'Incorrect PIN.');
+      setPinError('Incorrect password. Please try again.');
       return;
     }
 
     setIsMedicalAidVisible(true);
     setPinInput('');
+    setPinError('');
     setIsPinModalVisible(false);
   };
 
   const handleCancelPin = () => {
     setPinInput('');
+    setPinError('');
     setIsPinModalVisible(false);
   };
 
@@ -2814,6 +2859,33 @@ function EmergencyProfileScreen({ route, navigation }) {
               Alert.alert('Could Not Save', error.message || 'Could not send the absence notice.');
             } finally {
               setParentAbsentSaving(false);
+            }
+          },
+        },
+      ],
+    );
+  };
+
+  const handleDeleteStudent = () => {
+    if (!canEditStudents || !student?.id) {
+      return;
+    }
+
+    Alert.alert(
+      'Delete Student',
+      `Are you sure you want to delete ${getStudentFullName(student)} from the system? This action cannot be undone.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await deleteStudentFromFirestore(student.id);
+              Alert.alert('Deleted', `${getStudentFullName(student)} has been removed.`);
+              navigation.navigate('StudentDirectory');
+            } catch (error) {
+              Alert.alert('Error', error.message || 'Could not delete student.');
             }
           },
         },
@@ -2959,6 +3031,12 @@ function EmergencyProfileScreen({ route, navigation }) {
           </View>
         )}
 
+        {canEditStudents ? (
+          <TouchableOpacity style={styles.modalButtonSecondary} onPress={handleDeleteStudent}>
+            <Text style={styles.modalButtonSecondaryText}>Remove Student</Text>
+          </TouchableOpacity>
+        ) : null}
+
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>Contact Details</Text>
           {emergencyContacts.map((contact, index) => (
@@ -3102,8 +3180,14 @@ function EmergencyProfileScreen({ route, navigation }) {
           </View>
         ))}
 
-        <TouchableOpacity style={styles.reportButton} onPress={exportLearnerHistory}>
-          <Text style={styles.saveStudentButtonText}>Export Learner History</Text>
+        <TouchableOpacity
+          style={[styles.reportButton, !canExportReports && styles.saveStudentButtonDisabled]}
+          onPress={exportLearnerHistory}
+          disabled={!canExportReports}
+        >
+          <Text style={styles.saveStudentButtonText}>
+            {canExportReports ? 'Export Learner History' : 'Export not available for your role'}
+          </Text>
         </TouchableOpacity>
 
         <Modal
@@ -3120,11 +3204,16 @@ function EmergencyProfileScreen({ route, navigation }) {
               <TextInput
                 style={styles.pinInput}
                 value={pinInput}
-                onChangeText={setPinInput}
+                onChangeText={(text) => {
+                  setPinInput(text);
+                  setPinError('');
+                }}
                 placeholder="Vault password"
                 secureTextEntry
                 autoCapitalize="none"
               />
+
+              {pinError ? <Text style={styles.errorText}>{pinError}</Text> : null}
 
               <View style={styles.modalButtonsRow}>
                 <TouchableOpacity style={styles.modalButtonSecondary} onPress={handleCancelPin}>
@@ -4855,6 +4944,294 @@ function ComplianceReportsScreen({ navigation }) {
       const incidents = await fetchIncidentsFromFirestore();
       const medicine = await fetchMedicineLogsFromFirestore();
 
+      // Filter students by selected classes
+      const isExportingAllClasses = selectedClasses.includes('All Classes');
+      const filteredStudents = isExportingAllClasses
+        ? students
+        : (students || []).filter((student) => selectedClasses.includes(getClassroomName(student)));
+      const studentIds = new Set(filteredStudents.map((s) => String(s?.id || '').trim()));
+
+      // Filter data by date range and selected classes
+      const filteredAttendance = (attendance || []).filter((entry) => {
+        const entryDate = entry?.date || '';
+        const isInDateRange = entryDate >= startDate && entryDate <= endDate;
+        const isInSelectedClass = studentIds.has(String(entry?.studentId || '').trim());
+        return isInDateRange && isInSelectedClass;
+      });
+
+      const filteredIncidents = (incidents || []).filter((incident) => {
+        const incidentDate = (incident?.timestamp || '').split('T')[0];
+        const isInDateRange = incidentDate >= startDate && incidentDate <= endDate;
+        const isInSelectedClass = studentIds.has(String(incident?.studentId || '').trim());
+        return isInDateRange && isInSelectedClass;
+      });
+
+      const filteredMedicine = (medicine || []).filter((entry) => {
+        const medDate = (entry?.timeAdministered || '').split('T')[0];
+        const isInDateRange = medDate >= startDate && medDate <= endDate;
+        const isInSelectedClass = studentIds.has(String(entry?.studentId || '').trim());
+        return isInDateRange && isInSelectedClass;
+      });
+
+      // Build attendance table rows
+      const absentLateAttendance = filteredAttendance.filter((e) => e?.status && ['Absent', 'Late'].includes(e.status));
+      const attendanceRows = absentLateAttendance
+        .map((entry) => `<tr><td>${escapeHtml(entry.date || '-')}</td><td>${escapeHtml(entry.studentName || 'Unknown')}</td><td>${escapeHtml(entry.status || '')}</td><td>${escapeHtml(entry.reason || '')}</td></tr>`)
+        .join('');
+
+      // Build incident table rows
+      const incidentRows = filteredIncidents
+        .map((incident) => {
+          const incidentTime = incident?.timestamp ? new Date(incident.timestamp).toLocaleString() : '-';
+          return `<tr><td>${escapeHtml(incidentTime)}</td><td>${escapeHtml(incident.location || '-')}</td><td>${escapeHtml(incident.studentName || 'General')}</td><td>${escapeHtml(incident.description || '-')}</td><td>${escapeHtml(incident.actionTaken || '-')}</td></tr>`;
+        })
+        .join('');
+
+      // Build medicine table rows
+      const medicineRows = filteredMedicine
+        .map((entry) => {
+          const medTime = entry?.timeAdministered ? new Date(entry.timeAdministered).toLocaleString() : '-';
+          return `<tr><td>${escapeHtml(medTime)}</td><td>${escapeHtml(entry.studentName || 'Unknown')}</td><td>${escapeHtml(entry.medicationName || '-')}</td><td>${escapeHtml(entry.dosage || '-')}</td><td>${escapeHtml(entry.staffMember || '-')}</td><td>${entry.allergyWarning ? 'YES' : 'No'}</td></tr>`;
+        })
+        .join('');
+
+      const classesLabel = isExportingAllClasses ? 'All Classes' : selectedClasses.join(', ');
+      const html = `
+        <!DOCTYPE html>
+        <html>
+          <head>
+            <meta charset="UTF-8" />
+            <style>
+              @page {
+                margin: 72px 72px 72px 72px;
+              }
+              * { margin: 0; padding: 0; box-sizing: border-box; }
+              body { 
+                font-family: Helvetica, Arial, sans-serif; 
+                padding: 48px 48px;
+                line-height: 1.4;
+              }
+              h1 { 
+                color: #102A43; 
+                font-size: 24px; 
+                margin: 0 0 16px 0;
+                padding: 0;
+              }
+              .header-info {
+                margin: 0 0 24px 0;
+              }
+              .header-info p { 
+                margin: 6px 0; 
+                color: #333; 
+                font-size: 12px;
+              }
+              .section {
+                page-break-before: always;
+                margin: 0;
+                padding: 24px 0 0 0;
+              }
+              .section:first-of-type {
+                page-break-before: avoid;
+                padding: 0;
+              }
+              h2 { 
+                color: #102A43; 
+                font-size: 16px; 
+                margin: 0 0 16px 0;
+                padding: 0;
+                font-weight: bold;
+              }
+              p { 
+                margin: 0; 
+                color: #333; 
+                font-size: 12px;
+                padding: 12px 0;
+              }
+              table { 
+                width: 100%; 
+                border-collapse: collapse; 
+                margin: 12px 0 0 0; 
+                font-size: 11px;
+              }
+              th { 
+                background: #102A43; 
+                color: white; 
+                padding: 10px 8px; 
+                text-align: left; 
+                font-weight: bold;
+                border: 1px solid #333;
+              }
+              td { 
+                padding: 8px; 
+                border: 1px solid #E0E0E0;
+              }
+              tr:nth-child(even) { 
+                background: #F8FAFC; 
+              }
+              tr:nth-child(odd) {
+                background: #FFFFFF;
+              }
+            </style>
+          </head>
+          <body>
+            <div class="header-info">
+              <h1>School Safety & Compliance Report</h1>
+              <p><strong>School:</strong> ${escapeHtml(schoolName.trim() || DEFAULT_SCHOOL_NAME)}</p>
+              <p><strong>Classes:</strong> ${escapeHtml(classesLabel)}</p>
+              <p><strong>Date Range:</strong> ${escapeHtml(startDate)} to ${escapeHtml(endDate)}</p>
+              <p><strong>Generated:</strong> ${escapeHtml(new Date().toLocaleString())}</p>
+            </div>
+
+            <div class="section">
+              <h2>Attendance Register (Absent and Late only)</h2>
+              ${attendanceRows ? `<table><thead><tr><th>Date</th><th>Learner</th><th>Status</th><th>Reason</th></tr></thead><tbody>${attendanceRows}</tbody></table>` : '<p>No absences or late arrivals recorded.</p>'}
+            </div>
+
+            <div class="section">
+              <h2>Incident / Accident Register</h2>
+              ${incidentRows ? `<table><thead><tr><th>Date/Time</th><th>Location</th><th>Learner</th><th>Description</th><th>Action Taken</th></tr></thead><tbody>${incidentRows}</tbody></table>` : '<p>No incidents recorded.</p>'}
+            </div>
+
+            <div class="section">
+              <h2>Medicine Administration Log</h2>
+              ${medicineRows ? `<table><thead><tr><th>Date/Time</th><th>Learner</th><th>Medication</th><th>Dosage</th><th>Staff Member</th><th>Allergy Warning</th></tr></thead><tbody>${medicineRows}</tbody></table>` : '<p>No medicine logs recorded.</p>'}
+            </div>
+          </body>
+        </html>
+      `;
+
+      const file = await Print.printToFileAsync({ html });
+      const canShare = await Sharing.isAvailableAsync();
+
+      if (canShare) {
+        await Sharing.shareAsync(file.uri, {
+          mimeType: 'application/pdf',
+          dialogTitle: 'Export Compliance Report',
+          UTI: 'com.adobe.pdf',
+        });
+      } else {
+        await Linking.openURL(file.uri);
+      }
+    } catch (error) {
+      Alert.alert('Export Failed', error.message || 'Could not generate compliance report.');
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  return (
+    <SafeAreaView style={styles.container}>
+      <ScrollView contentContainerStyle={styles.formContainer}>
+        <Text style={styles.title}>Compliance Report Export</Text>
+        <Text style={styles.subtitle}>Generate a professional PDF layout for audits and recordkeeping</Text>
+
+        <View style={styles.infoBox}>
+          <Text style={styles.infoText}>The PDF includes School Name, Date Range, Classes, attendance (Late/Absent only), incidents, and medicine logs.</Text>
+        </View>
+
+        <TextInput
+          style={styles.formInput}
+          placeholder="School Name"
+          placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+          value={schoolName}
+          onChangeText={setSchoolName}
+        />
+
+        <Text style={styles.formSectionLabel}>Filter by Class</Text>
+        <View style={styles.actionRow}>
+          {allAvailableClasses.map((className) => {
+            const isSelected = selectedClasses.includes(className);
+            return (
+              <TouchableOpacity
+                key={`export-class-${className}`}
+                style={[styles.chipButton, isSelected && styles.chipButtonSelected]}
+                onPress={() => handleToggleClass(className)}
+                disabled={isGenerating}
+              >
+                <Text style={[styles.chipButtonText, isSelected && styles.selectedActionText]}>{className}</Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+        <Text style={styles.tapHint}>Select "All Classes" or specific classes to include in the export.</Text>
+
+        <View style={styles.compactDateRangeContainer}>
+          <View style={styles.compactDateFieldWrapper}>
+            <Text style={styles.compactDateLabel}>Start Date</Text>
+            <TouchableOpacity
+              style={styles.compactDateField}
+              onPress={() => setShowStartPicker(true)}
+            >
+              <Text style={styles.compactDateFieldText}>{formatCompactDateDisplay(startYear, startMonth, startDay)}</Text>
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.compactDateFieldWrapper}>
+            <Text style={styles.compactDateLabel}>End Date</Text>
+            <TouchableOpacity
+              style={styles.compactDateField}
+              onPress={() => setShowEndPicker(true)}
+            >
+              <Text style={styles.compactDateFieldText}>{formatCompactDateDisplay(endYear, endMonth, endDay)}</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        <TouchableOpacity style={[styles.reportButton, isGenerating && { opacity: 0.6 }]} onPress={handleExport} disabled={isGenerating}>
+          <Text style={styles.saveStudentButtonText}>{isGenerating ? 'Generating PDF...' : 'Open PDF Export'}</Text>
+        </TouchableOpacity>
+
+        <CompactDatePickerModal
+          visible={showStartPicker}
+          onClose={() => setShowStartPicker(false)}
+          onDateSelect={(_, m, d) => {
+            setStartMonth(m);
+            setStartDay(d);
+          }}
+          currentYear={currentYear}
+          currentMonth={startMonth}
+          currentDay={startDay}
+        />
+
+        <CompactDatePickerModal
+          visible={showEndPicker}
+          onClose={() => setShowEndPicker(false)}
+          onDateSelect={(_, m, d) => {
+            setEndMonth(m);
+            setEndDay(d);
+          }}
+          currentYear={currentYear}
+          currentMonth={endMonth}
+          currentDay={endDay}
+        />
+      </ScrollView>
+    </SafeAreaView>
+  );
+
+  const startDate = `${startYear}-${startMonth}-${startDay}`;
+  const endDate = `${endYear}-${endMonth}-${endDay}`;
+
+  const handleExport = async () => {
+    if (startDate > endDate) {
+      Alert.alert('Date Range Error', 'Start date must be before or equal to end date.');
+      return;
+    }
+
+    setIsGenerating(true);
+    try {
+      const escapeHtml = (value) => String(value || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+
+      // Fetch all data from Firestore
+      const students = await fetchStudentsFromFirestore();
+      const attendance = await fetchAllAttendanceFromFirestore();
+      const incidents = await fetchIncidentsFromFirestore();
+      const medicine = await fetchMedicineLogsFromFirestore();
+
       // Filter data by date range
       const filteredAttendance = (attendance || []).filter((entry) => {
         const entryDate = entry?.date || '';
@@ -5173,7 +5550,6 @@ function StudentFormScreen({ navigation, route }) {
   const [mainMemberIdNumber, setMainMemberIdNumber] = useState(initialStudent?.mainMemberIdNumber || '');
   const [childDependencyCode, setChildDependencyCode] = useState(initialStudent?.childDependencyCode || '');
   const [doctorContact, setDoctorContact] = useState(initialStudent?.doctorContact || '');
-  const [medicalPin, setMedicalPin] = useState(initialStudent?.medicalPin || '');
   const [isSaving, setIsSaving] = useState(false);
   const [knownClassOptions, setKnownClassOptions] = useState(CLASSROOM_OPTIONS.slice(1));
   const isParentEditMode = mode === 'parent-edit';
@@ -5250,7 +5626,6 @@ function StudentFormScreen({ navigation, route }) {
       mainMemberIdNumber: mainMemberIdNumber.trim(),
       childDependencyCode: childDependencyCode.trim(),
       doctorContact: doctorContact.trim(),
-      medicalPin: medicalPin.trim(),
     };
 
     try {
@@ -5272,11 +5647,7 @@ function StudentFormScreen({ navigation, route }) {
         <Text style={styles.formTitle}>
           {isParentEditMode ? 'Update Medical Info' : mode === 'edit' ? 'Edit Student Info' : 'Add New Student'}
         </Text>
-        {!canSaveStudent ? (
-          <View style={styles.infoBox}>
-            <Text style={styles.infoText}>This account has view-only student access. Ask a principal/admin account to make changes.</Text>
-          </View>
-        ) : isParentEditMode ? (
+        {isParentEditMode ? (
           <View style={styles.infoBox}>
             <Text style={styles.infoText}>You can update emergency contacts and medical information for your linked child here. Learner name, class, attendance, incident, and medicine records stay protected.</Text>
           </View>
@@ -5454,15 +5825,6 @@ function StudentFormScreen({ navigation, route }) {
           placeholderTextColor={FORM_PLACEHOLDER_COLOR}
           value={doctorContact}
           onChangeText={setDoctorContact}
-        />
-        <Text style={styles.formSectionLabel}>Medical PIN</Text>
-        <TextInput
-          style={styles.formInput}
-          placeholder="Medical PIN"
-          placeholderTextColor={FORM_PLACEHOLDER_COLOR}
-          value={medicalPin}
-          onChangeText={setMedicalPin}
-          secureTextEntry
         />
 
         <TouchableOpacity
