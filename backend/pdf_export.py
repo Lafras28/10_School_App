@@ -62,6 +62,7 @@ def build_compliance_report_pdf(
     attendance_entries: list[dict],
     incidents: list[dict],
     medicine_logs: list[dict],
+    general_logs: list[dict],
 ) -> bytes:
     buffer = BytesIO()
     document = SimpleDocTemplate(
@@ -170,6 +171,21 @@ def build_compliance_report_pdf(
         elements.append(_build_table(medicine_rows, [34 * mm, 30 * mm, 34 * mm, 20 * mm, 34 * mm, 16 * mm]))
     else:
         elements.append(Paragraph('No medicine logs were found for the selected date range.', body_style))
+
+    elements.append(Paragraph('General Communication Log', section_style))
+    if general_logs:
+        general_rows = [['Timestamp', 'Learner', 'Subject', 'Staff Member', 'Note']]
+        for entry in general_logs:
+            general_rows.append([
+                _format_date(entry.get('timestamp', '-')),
+                str(entry.get('studentName') or entry.get('studentId') or 'Learner'),
+                str(entry.get('subject', '-')),
+                str(entry.get('staffMember', '-')),
+                str(entry.get('note', '-')),
+            ])
+        elements.append(_build_table(general_rows, [30 * mm, 34 * mm, 36 * mm, 34 * mm, 46 * mm]))
+    else:
+        elements.append(Paragraph('No general communication logs were found for the selected date range.', body_style))
 
     document.build(elements)
     return buffer.getvalue()

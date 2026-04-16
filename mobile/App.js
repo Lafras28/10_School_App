@@ -29,6 +29,7 @@ import {
   fetchActivitiesFromFirestore,
   fetchAttendanceFromFirestore,
   fetchComplianceDocuments,
+  fetchGeneralLogsFromFirestore,
   fetchIncidentsFromFirestore,
   fetchMedicineLogsFromFirestore,
   fetchStudentsFromFirestore,
@@ -38,10 +39,12 @@ import {
   saveActivityToFirestore,
   updateActivityInFirestore,
   saveComplianceDocument,
+  saveGeneralLogToFirestore,
   saveIncidentToFirestore,
   saveMedicineLogToFirestore,
   saveStudentToFirestore,
   seedAttendanceToFirestore,
+  seedGeneralLogsToFirestore,
   seedIncidentsToFirestore,
   seedMedicineLogsToFirestore,
   seedStudentsToFirestore,
@@ -106,6 +109,7 @@ const MANAGEABLE_PERMISSION_OPTIONS = [
   { key: 'canTakeAttendance', label: 'Attendance' },
   { key: 'canLogIncidents', label: 'Incidents' },
   { key: 'canLogMedicine', label: 'Medicine' },
+  { key: 'canLogGeneral', label: 'General' },
   { key: 'canExportReports', label: 'Reports' },
   { key: 'canManageUsers', label: 'Manage users' },
 ];
@@ -577,6 +581,30 @@ async function loadMedicineLogsFromDataStore() {
   return nextLogs;
 }
 
+async function loadGeneralLogsFromDataStore() {
+  try {
+    const firestoreLogs = await fetchGeneralLogsFromFirestore();
+    if (Array.isArray(firestoreLogs) && firestoreLogs.length > 0) {
+      return firestoreLogs;
+    }
+  } catch (error) {
+    console.warn('Firestore general logs unavailable, using backend fallback.', error);
+  }
+
+  const fallbackData = await fetchJson(`${API_BASE_URL}/general-logs`);
+  const nextLogs = Array.isArray(fallbackData) ? fallbackData : [];
+
+  if (nextLogs.length > 0) {
+    try {
+      await seedGeneralLogsToFirestore(nextLogs);
+    } catch (error) {
+      console.warn('Could not seed Firestore general logs from backend data.', error);
+    }
+  }
+
+  return nextLogs;
+}
+
 async function saveMedicineLogRecord(payload, student = null) {
   try {
     return await saveMedicineLogToFirestore(payload, student);
@@ -584,6 +612,24 @@ async function saveMedicineLogRecord(payload, student = null) {
     console.warn('Firestore medicine save failed, using backend fallback.', firestoreError);
 
     const data = await fetchJson(`${API_BASE_URL}/medicine`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
+
+    return data?.entry || payload;
+  }
+}
+
+async function saveGeneralLogRecord(payload, student = null) {
+  try {
+    return await saveGeneralLogToFirestore(payload, student);
+  } catch (firestoreError) {
+    console.warn('Firestore general log save failed, using backend fallback.', firestoreError);
+
+    const data = await fetchJson(`${API_BASE_URL}/general-logs`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -1065,6 +1111,11 @@ export default function App() {
             options={({ route }) => ({
               title: route.params?.className || 'Class Folder',
             })}
+          />
+          <Stack.Screen
+            name="GeneralCommunication"
+            component={GeneralCommunicationScreen}
+            options={{ title: 'General Communication' }}
           />
           <Stack.Screen
             name="ComplianceReports"
@@ -2199,6 +2250,7 @@ function StudentClassFolderScreen({ route, navigation }) {
   const canTakeAttendance = hasPermission(accessProfile, 'canTakeAttendance');
   const canLogIncidents = hasPermission(accessProfile, 'canLogIncidents');
   const canLogMedicine = hasPermission(accessProfile, 'canLogMedicine');
+  const canLogGeneral = hasPermission(accessProfile, 'canLogGeneral');
   const [students, setStudents] = useState([]);
   const [attendanceEntries, setAttendanceEntries] = useState([]);
   const [savingAttendanceId, setSavingAttendanceId] = useState('');
@@ -2216,6 +2268,11 @@ function StudentClassFolderScreen({ route, navigation }) {
   const [medicineDosage, setMedicineDosage] = useState('');
   const [medicineStaffMember, setMedicineStaffMember] = useState('');
   const [medicineSaving, setMedicineSaving] = useState(false);
+  const [generalStudent, setGeneralStudent] = useState(null);
+  const [generalSubject, setGeneralSubject] = useState('');
+  const [generalNote, setGeneralNote] = useState('');
+  const [generalStaffMember, setGeneralStaffMember] = useState('');
+  const [generalSaving, setGeneralSaving] = useState(false);
 
   const fetchStudents = useCallback(async () => {
     try {
@@ -2393,6 +2450,25 @@ function StudentClassFolderScreen({ route, navigation }) {
     setMedicineStaffMember('');
   };
 
+  const openGeneralModal = (student) => {
+    if (!canLogGeneral) {
+      Alert.alert('Access Restricted', 'Your account can view general logs but cannot create them.');
+      return;
+    }
+
+    setGeneralStudent(student);
+    setGeneralSubject('');
+    setGeneralNote('');
+    setGeneralStaffMember('');
+  };
+
+  const closeGeneralModal = () => {
+    setGeneralStudent(null);
+    setGeneralSubject('');
+    setGeneralNote('');
+    setGeneralStaffMember('');
+  };
+
   const handleSaveMedicine = async () => {
     if (!medicineStudent) {
       return;
@@ -2425,6 +2501,34 @@ function StudentClassFolderScreen({ route, navigation }) {
     }
   };
 
+  const handleSaveGeneral = async () => {
+    if (!generalStudent) {
+      return;
+    }
+
+    if (!generalSubject.trim() || !generalNote.trim() || !generalStaffMember.trim()) {
+      Alert.alert('Missing Details', 'Please complete subject, note, and staff member.');
+      return;
+    }
+
+    try {
+      setGeneralSaving(true);
+      await saveGeneralLogRecord({
+        studentId: String(generalStudent.id || '').trim(),
+        subject: generalSubject.trim(),
+        note: generalNote.trim(),
+        staffMember: generalStaffMember.trim(),
+      }, generalStudent);
+
+      closeGeneralModal();
+      Alert.alert('Saved', 'General communication logged for this learner.');
+    } catch (error) {
+      Alert.alert('Error', error.message || 'Could not save the general log.');
+    } finally {
+      setGeneralSaving(false);
+    }
+  };
+
   const activeMedicineAllergyWarning = useMemo(
     () => doesMedicationTriggerAllergy(medicineName, medicineStudent?.allergies || ''),
     [medicineName, medicineStudent],
@@ -2435,7 +2539,7 @@ function StudentClassFolderScreen({ route, navigation }) {
       <ScrollView contentContainerStyle={styles.formContainer}>
         <Text style={styles.title}>{className}</Text>
         <Text style={styles.subtitle}>Students in this class with quick daily logging</Text>
-        <Text style={styles.helperText}>Use each learner card to set attendance status and quickly log incidents or medicine without leaving Students.</Text>
+        <Text style={styles.helperText}>Use each learner card to set attendance status and quickly add incident, medicine, or general communication logs without leaving Students.</Text>
 
         <TextInput
           style={styles.searchInput}
@@ -2495,7 +2599,7 @@ function StudentClassFolderScreen({ route, navigation }) {
                   onPress={() => openIncidentModal(student)}
                   disabled={!canLogIncidents}
                 >
-                  <Text style={styles.quickLogButtonText}>Log Incident</Text>
+                  <Text style={styles.quickLogButtonText}>Incident</Text>
                 </TouchableOpacity>
 
                 <TouchableOpacity
@@ -2503,7 +2607,15 @@ function StudentClassFolderScreen({ route, navigation }) {
                   onPress={() => openMedicineModal(student)}
                   disabled={!canLogMedicine}
                 >
-                  <Text style={styles.quickLogButtonText}>Log Medicine</Text>
+                  <Text style={styles.quickLogButtonText}>Medicine</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[styles.quickLogButton, !canLogGeneral && styles.saveStudentButtonDisabled]}
+                  onPress={() => openGeneralModal(student)}
+                  disabled={!canLogGeneral}
+                >
+                  <Text style={styles.quickLogButtonText}>General</Text>
                 </TouchableOpacity>
               </View>
 
@@ -2632,6 +2744,60 @@ function StudentClassFolderScreen({ route, navigation }) {
           </View>
         </TouchableWithoutFeedback>
       </Modal>
+
+      <Modal
+        visible={Boolean(generalStudent)}
+        transparent
+        animationType="fade"
+        onRequestClose={closeGeneralModal}
+      >
+        <TouchableWithoutFeedback onPress={closeGeneralModal}>
+          <View style={styles.modalBackdrop}>
+            <TouchableWithoutFeedback onPress={() => {}}>
+              <View style={styles.modalCard}>
+                <Text style={styles.modalTitle}>General Communication</Text>
+                <Text style={styles.modalText}>{generalStudent ? getStudentFullName(generalStudent) : ''}</Text>
+
+                <TextInput
+                  style={styles.formInput}
+                  placeholder="Subject"
+                  placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+                  value={generalSubject}
+                  onChangeText={setGeneralSubject}
+                />
+                <TextInput
+                  style={[styles.formInput, styles.reasonInput]}
+                  placeholder="Note"
+                  placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+                  value={generalNote}
+                  onChangeText={setGeneralNote}
+                  multiline
+                />
+                <TextInput
+                  style={styles.formInput}
+                  placeholder="Staff Member"
+                  placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+                  value={generalStaffMember}
+                  onChangeText={setGeneralStaffMember}
+                />
+
+                <View style={styles.modalButtonsRow}>
+                  <TouchableOpacity style={styles.modalButtonSecondary} onPress={closeGeneralModal}>
+                    <Text style={styles.modalButtonSecondaryText}>Cancel</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.modalButtonPrimary, generalSaving && styles.saveStudentButtonDisabled]}
+                    onPress={handleSaveGeneral}
+                    disabled={generalSaving}
+                  >
+                    <Text style={styles.modalButtonPrimaryText}>{generalSaving ? 'Saving...' : 'Save'}</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </TouchableWithoutFeedback>
+          </View>
+        </TouchableWithoutFeedback>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -2654,6 +2820,7 @@ function EmergencyProfileScreen({ route, navigation }) {
   const [attendanceHistory, setAttendanceHistory] = useState([]);
   const [incidentHistory, setIncidentHistory] = useState([]);
   const [medicineHistory, setMedicineHistory] = useState([]);
+  const [generalHistory, setGeneralHistory] = useState([]);
   const emergencyContacts = Array.isArray(student.emergencyContacts) ? student.emergencyContacts : [];
   const allergies = String(student.allergies || '').trim().toLowerCase();
   const hasCriticalAllergy = allergies && allergies !== 'none' && allergies !== 'no known allergies';
@@ -2725,6 +2892,15 @@ function EmergencyProfileScreen({ route, navigation }) {
       </tr>
     `).join('');
 
+    const generalRows = generalHistory.map((entry) => `
+      <tr>
+        <td>${escapeHtml(formatDateTime(entry.timestamp))}</td>
+        <td>${escapeHtml(entry.subject || 'General communication')}</td>
+        <td>${escapeHtml(entry.note || 'Not recorded')}</td>
+        <td>${escapeHtml(entry.staffMember || 'Not recorded')}</td>
+      </tr>
+    `).join('');
+
     const html = `
       <html>
         <head>
@@ -2753,6 +2929,9 @@ function EmergencyProfileScreen({ route, navigation }) {
 
           <h2>Medicine Log History</h2>
           ${medicineRows ? `<table><thead><tr><th>Date/Time</th><th>Medication</th><th>Dosage</th><th>Staff Member</th></tr></thead><tbody>${medicineRows}</tbody></table>` : '<p>No records found.</p>'}
+
+          <h2>General Communication History</h2>
+          ${generalRows ? `<table><thead><tr><th>Date/Time</th><th>Subject</th><th>Note</th><th>Staff Member</th></tr></thead><tbody>${generalRows}</tbody></table>` : '<p>No records found.</p>'}
         </body>
       </html>
     `;
@@ -2773,7 +2952,7 @@ function EmergencyProfileScreen({ route, navigation }) {
     } catch (error) {
       Alert.alert('Export Failed', error.message || 'Could not export learner history.');
     }
-  }, [attendanceHistory, incidentHistory, medicineHistory, student]);
+  }, [attendanceHistory, incidentHistory, medicineHistory, generalHistory, student]);
 
   const handleDial = async (phoneNumber) => {
     if (!phoneNumber) {
@@ -2973,16 +3152,18 @@ function EmergencyProfileScreen({ route, navigation }) {
         setAttendanceHistory([]);
         setIncidentHistory([]);
         setMedicineHistory([]);
+        setGeneralHistory([]);
         setHistoryLoading(false);
         return;
       }
 
       try {
         setHistoryLoading(true);
-        const [attendanceData, incidentData, medicineData] = await Promise.all([
+        const [attendanceData, incidentData, medicineData, generalData] = await Promise.all([
           fetchAllAttendanceFromFirestore(),
           loadIncidentsFromDataStore(),
           loadMedicineLogsFromDataStore(),
+          loadGeneralLogsFromDataStore(),
         ]);
 
         if (!isActive) {
@@ -2993,6 +3174,7 @@ function EmergencyProfileScreen({ route, navigation }) {
         const scopedAttendance = isParentAccount ? filterRecordsByAccess(attendanceData, accessProfile) : attendanceData;
         const scopedIncidents = isParentAccount ? filterRecordsByAccess(incidentData, accessProfile) : incidentData;
         const scopedMedicine = isParentAccount ? filterRecordsByAccess(medicineData, accessProfile) : medicineData;
+        const scopedGeneral = isParentAccount ? filterRecordsByAccess(generalData, accessProfile) : generalData;
 
         setAttendanceHistory(
           scopedAttendance.filter((entry) => {
@@ -3002,6 +3184,7 @@ function EmergencyProfileScreen({ route, navigation }) {
         );
         setIncidentHistory(scopedIncidents.filter((entry) => String(entry.studentId || '').trim() === normalizedStudentId));
         setMedicineHistory(scopedMedicine.filter((entry) => String(entry.studentId || '').trim() === normalizedStudentId));
+        setGeneralHistory(scopedGeneral.filter((entry) => String(entry.studentId || '').trim() === normalizedStudentId));
       } catch (error) {
         console.warn('Could not load parent history view.', error);
       } finally {
@@ -3180,6 +3363,17 @@ function EmergencyProfileScreen({ route, navigation }) {
             <Text style={styles.studentName}>{entry.medicationName || 'Medication'}</Text>
             <Text style={styles.timelineMeta}>{formatDateTime(entry.timeAdministered)}</Text>
             <Text style={styles.timelineText}>Dosage: {entry.dosage || 'Not recorded'}</Text>
+            <Text style={styles.tapHint}>Staff member: {entry.staffMember || 'Not recorded'}</Text>
+          </View>
+        ))}
+
+        <Text style={styles.sectionTitle}>General Communication History</Text>
+        {!historyLoading && generalHistory.length === 0 ? <Text style={styles.statusText}>No general communication entries yet.</Text> : null}
+        {generalHistory.slice(0, 12).map((entry) => (
+          <View key={entry.id} style={styles.timelineCard}>
+            <Text style={styles.studentName}>{entry.subject || 'General communication'}</Text>
+            <Text style={styles.timelineMeta}>{formatDateTime(entry.timestamp)}</Text>
+            <Text style={styles.timelineText}>{entry.note || 'Not recorded'}</Text>
             <Text style={styles.tapHint}>Staff member: {entry.staffMember || 'Not recorded'}</Text>
           </View>
         ))}
@@ -3831,6 +4025,158 @@ function MedicineAdministrationScreen({ navigation }) {
             <Text style={styles.timelineText}>{entry.medicationName} - {entry.dosage}</Text>
             <Text style={styles.tapHint}>Given by: {entry.staffMember}</Text>
             {entry.allergyWarning ? <Text style={styles.warningText}>WARNING flagged against allergy record</Text> : null}
+          </View>
+        ))}
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
+function GeneralCommunicationScreen({ navigation }) {
+  const accessProfile = useAccessProfile();
+  const canLogGeneral = hasPermission(accessProfile, 'canLogGeneral');
+  const [students, setStudents] = useState([]);
+  const [selectedStudentId, setSelectedStudentId] = useState('');
+  const [subject, setSubject] = useState('');
+  const [note, setNote] = useState('');
+  const [staffMember, setStaffMember] = useState('');
+  const [generalLogs, setGeneralLogs] = useState([]);
+  const [isSaving, setIsSaving] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [errorMessage, setErrorMessage] = useState('');
+
+  const selectedStudent = useMemo(
+    () => students.find((student) => student.id === selectedStudentId) || null,
+    [students, selectedStudentId],
+  );
+
+  useEffect(() => {
+    if (!canLogGeneral) {
+      Alert.alert('Access Restricted', 'Your account does not have permission to open General logs.');
+      navigation.goBack();
+    }
+  }, [canLogGeneral, navigation]);
+
+  const fetchGeneralData = useCallback(async () => {
+    try {
+      setLoading(true);
+      setErrorMessage('');
+      const [studentData, logData] = await Promise.all([
+        loadStudentsFromDataStore(),
+        loadGeneralLogsFromDataStore(),
+      ]);
+
+      const nextStudents = Array.isArray(studentData) ? studentData : [];
+      setStudents(nextStudents);
+      setGeneralLogs(Array.isArray(logData) ? logData : []);
+    } catch (error) {
+      setErrorMessage(error.message || 'Could not load general logs.');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchGeneralData();
+  }, [fetchGeneralData]);
+
+  useFocusEffect(
+    useCallback(() => {
+      fetchGeneralData();
+    }, [fetchGeneralData]),
+  );
+
+  const handleSubmit = async () => {
+    if (!canLogGeneral) {
+      Alert.alert('Access Restricted', 'Your account can view general logs but cannot create them.');
+      return;
+    }
+
+    if (!selectedStudentId || !subject.trim() || !note.trim() || !staffMember.trim()) {
+      Alert.alert('Missing Details', 'Please select a learner and complete all general log fields.');
+      return;
+    }
+
+    try {
+      setIsSaving(true);
+      const savedEntry = await saveGeneralLogRecord({
+        studentId: selectedStudentId,
+        subject: subject.trim(),
+        note: note.trim(),
+        staffMember: staffMember.trim(),
+      }, selectedStudent);
+
+      setGeneralLogs((currentLogs) => [savedEntry, ...currentLogs]);
+      setSubject('');
+      setNote('');
+      setStaffMember('');
+      Alert.alert('Saved', 'General communication logged in Firestore.');
+    } catch (error) {
+      Alert.alert('Error', error.message || 'Could not save the general log.');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  return (
+    <SafeAreaView style={styles.container}>
+      <ScrollView contentContainerStyle={styles.formContainer}>
+        <Text style={styles.title}>General Communication</Text>
+        <Text style={styles.subtitle}>Track parent or staff communication linked to a learner</Text>
+
+        <Text style={styles.formSectionLabel}>Learner</Text>
+        <StudentAutocomplete
+          students={students}
+          selectedStudentId={selectedStudentId}
+          onSelect={setSelectedStudentId}
+          placeholder="Search learner for general log"
+          helperText="Search by learner name or ID to quickly select the right child."
+        />
+
+        <TextInput
+          style={styles.formInput}
+          placeholder="Subject"
+          placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+          value={subject}
+          onChangeText={setSubject}
+        />
+        <TextInput
+          style={[styles.formInput, styles.reasonInput]}
+          placeholder="Note"
+          placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+          value={note}
+          onChangeText={setNote}
+          multiline
+        />
+        <TextInput
+          style={styles.formInput}
+          placeholder="Staff Member"
+          placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+          value={staffMember}
+          onChangeText={setStaffMember}
+        />
+
+        <TouchableOpacity
+          style={[styles.saveStudentButton, (isSaving || !canLogGeneral) && styles.saveStudentButtonDisabled]}
+          onPress={handleSubmit}
+          disabled={isSaving || !canLogGeneral}
+        >
+          <Text style={styles.saveStudentButtonText}>
+            {!canLogGeneral ? 'View-only general access' : isSaving ? 'Saving...' : 'Save General Log'}
+          </Text>
+        </TouchableOpacity>
+
+        {loading ? <Text style={styles.statusText}>Loading general records...</Text> : null}
+        {errorMessage ? <Text style={styles.errorText}>{errorMessage}</Text> : null}
+
+        <Text style={styles.sectionTitle}>Recent General Logs</Text>
+        {generalLogs.map((entry) => (
+          <View key={entry.id} style={styles.timelineCard}>
+            <Text style={styles.studentName}>{entry.studentName || entry.studentId}</Text>
+            <Text style={styles.timelineMeta}>{formatDateTime(entry.timestamp)}</Text>
+            <Text style={styles.timelineText}>{entry.subject || 'General communication'}</Text>
+            <Text style={styles.tapHint}>{entry.note || 'Not recorded'}</Text>
+            <Text style={styles.tapHint}>Logged by: {entry.staffMember || 'Not recorded'}</Text>
           </View>
         ))}
       </ScrollView>
@@ -4988,6 +5334,7 @@ function ComplianceReportsScreen({ navigation }) {
       const attendance = await fetchAllAttendanceFromFirestore();
       const incidents = await fetchIncidentsFromFirestore();
       const medicine = await fetchMedicineLogsFromFirestore();
+      const generalLogs = await fetchGeneralLogsFromFirestore();
 
       // Filter students by selected classes
       const isExportingAllClasses = selectedClasses.includes('All Classes');
@@ -5018,6 +5365,13 @@ function ComplianceReportsScreen({ navigation }) {
         return isInDateRange && isInSelectedClass;
       });
 
+      const filteredGeneralLogs = (generalLogs || []).filter((entry) => {
+        const logDate = (entry?.timestamp || '').split('T')[0];
+        const isInDateRange = logDate >= startDate && logDate <= endDate;
+        const isInSelectedClass = studentIds.has(String(entry?.studentId || '').trim());
+        return isInDateRange && isInSelectedClass;
+      });
+
       // Build attendance table rows
       const absentLateAttendance = filteredAttendance.filter((e) => e?.status && ['Absent', 'Late'].includes(e.status));
       const attendanceRows = absentLateAttendance
@@ -5037,6 +5391,13 @@ function ComplianceReportsScreen({ navigation }) {
         .map((entry) => {
           const medTime = entry?.timeAdministered ? new Date(entry.timeAdministered).toLocaleString() : '-';
           return `<tr><td>${escapeHtml(medTime)}</td><td>${escapeHtml(entry.studentName || 'Unknown')}</td><td>${escapeHtml(entry.medicationName || '-')}</td><td>${escapeHtml(entry.dosage || '-')}</td><td>${escapeHtml(entry.staffMember || '-')}</td><td>${entry.allergyWarning ? 'YES' : 'No'}</td></tr>`;
+        })
+        .join('');
+
+      const generalRows = filteredGeneralLogs
+        .map((entry) => {
+          const logTime = entry?.timestamp ? new Date(entry.timestamp).toLocaleString() : '-';
+          return `<tr><td>${escapeHtml(logTime)}</td><td>${escapeHtml(entry.studentName || 'Unknown')}</td><td>${escapeHtml(entry.subject || '-')}</td><td>${escapeHtml(entry.note || '-')}</td><td>${escapeHtml(entry.staffMember || '-')}</td></tr>`;
         })
         .join('');
 
@@ -5141,6 +5502,11 @@ function ComplianceReportsScreen({ navigation }) {
               <h2>Medicine Administration Log</h2>
               ${medicineRows ? `<table><thead><tr><th>Date/Time</th><th>Learner</th><th>Medication</th><th>Dosage</th><th>Staff Member</th><th>Allergy Warning</th></tr></thead><tbody>${medicineRows}</tbody></table>` : '<p>No medicine logs recorded.</p>'}
             </div>
+
+            <div class="section">
+              <h2>General Communication Log</h2>
+              ${generalRows ? `<table><thead><tr><th>Date/Time</th><th>Learner</th><th>Subject</th><th>Note</th><th>Staff Member</th></tr></thead><tbody>${generalRows}</tbody></table>` : '<p>No general communication logs recorded.</p>'}
+            </div>
           </body>
         </html>
       `;
@@ -5171,7 +5537,7 @@ function ComplianceReportsScreen({ navigation }) {
         <Text style={styles.subtitle}>Generate a professional PDF layout for audits and recordkeeping</Text>
 
         <View style={styles.infoBox}>
-          <Text style={styles.infoText}>The PDF includes School Name, Date Range, Classes, attendance (Late/Absent only), incidents, and medicine logs.</Text>
+          <Text style={styles.infoText}>The PDF includes School Name, Date Range, Classes, attendance (Late/Absent only), incidents, medicine logs, and general communication logs.</Text>
         </View>
 
         <TextInput

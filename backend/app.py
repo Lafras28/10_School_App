@@ -12,6 +12,7 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 
 from attendance_register import get_daily_register, list_attendance_entries_for_range, update_attendance_entry
+from general_log import create_general_log_record, list_general_logs
 from incident_register import create_incident_record, list_incidents
 from medicine_log import create_medicine_record, list_medicine_logs
 from pdf_export import build_compliance_report_pdf
@@ -476,6 +477,30 @@ def create_medicine_entry():
     }), 201
 
 
+@app.get('/general-logs')
+def list_general_log_entries():
+    return jsonify(list_general_logs()), 200
+
+
+@app.post('/general-logs')
+def create_general_log_entry():
+    payload = request.get_json(silent=True) or {}
+    student_id = str(payload.get('studentId') or '').strip()
+    student = get_student_by_id(student_id)
+    if student is None:
+        return jsonify({'error': 'Student not found.'}), 404
+
+    try:
+        entry = create_general_log_record(payload, student)
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+
+    return jsonify({
+        'message': 'General communication logged.',
+        'entry': entry,
+    }), 201
+
+
 @app.get('/exports/compliance-report')
 def export_compliance_report():
     school_id = str(request.args.get('schoolId') or '').strip()
@@ -496,6 +521,7 @@ def export_compliance_report():
     attendance_entries = [entry for entry in attendance_entries if entry.get('status') in ['Late', 'Absent']]
     incidents = filter_records_by_created_at(list_incidents(db, school_id), start_date, end_date, field_name='timestamp')
     medicine_entries = filter_records_by_created_at(list_medicine_logs(db, school_id), start_date, end_date, field_name='timeAdministered')
+    general_entries = filter_records_by_created_at(list_general_logs(db, school_id), start_date, end_date, field_name='timestamp')
 
     pdf_bytes = build_compliance_report_pdf(
         school_name=school_name,
@@ -504,6 +530,7 @@ def export_compliance_report():
         attendance_entries=attendance_entries,
         incidents=incidents,
         medicine_logs=medicine_entries,
+        general_logs=general_entries,
     )
 
     filename = f'compliance-report-{start_date}-to-{end_date}.pdf'

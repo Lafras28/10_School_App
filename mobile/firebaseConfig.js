@@ -32,6 +32,7 @@ const STUDENTS_COLLECTION = 'students';
 const ATTENDANCE_COLLECTION = 'attendance';
 const INCIDENTS_COLLECTION = 'incidents';
 const MEDICINE_LOGS_COLLECTION = 'medicine_logs';
+const GENERAL_LOGS_COLLECTION = 'general_logs';
 const COMPLIANCE_DOCS_COLLECTION = 'compliance_documents';
 const ACTIVITIES_COLLECTION = 'activities';
 const PRINCIPAL_EMAILS = new Set(['fritzlafras@gmail.com', 'principal@school.com']);
@@ -50,6 +51,7 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     canTakeAttendance: true,
     canLogIncidents: true,
     canLogMedicine: true,
+    canLogGeneral: true,
     canExportReports: true,
     canManageUsers: true,
     canEditOwnChildMedicalInfo: false,
@@ -59,6 +61,7 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     canTakeAttendance: true,
     canLogIncidents: true,
     canLogMedicine: true,
+    canLogGeneral: true,
     canExportReports: true,
     canManageUsers: false,
     canEditOwnChildMedicalInfo: false,
@@ -68,6 +71,7 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     canTakeAttendance: false,
     canLogIncidents: false,
     canLogMedicine: false,
+    canLogGeneral: false,
     canExportReports: true,
     canManageUsers: false,
     canEditOwnChildMedicalInfo: false,
@@ -77,6 +81,7 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     canTakeAttendance: false,
     canLogIncidents: false,
     canLogMedicine: false,
+    canLogGeneral: false,
     canExportReports: false,
     canManageUsers: false,
     canEditOwnChildMedicalInfo: true,
@@ -555,6 +560,22 @@ function normalizeMedicineLog(record = {}, fallbackId = '') {
   };
 }
 
+function normalizeGeneralLog(record = {}, fallbackId = '') {
+  const createdAt = String(record?.createdAt || record?.timestamp || new Date().toISOString()).trim();
+
+  return {
+    schoolId: normalizeSchoolId(record?.schoolId || activeSchoolId),
+    id: String(record?.id || fallbackId || createRecordId('gen')).trim(),
+    studentId: String(record?.studentId || '').trim(),
+    studentName: String(record?.studentName || '').trim(),
+    subject: String(record?.subject || '').trim(),
+    note: String(record?.note || '').trim(),
+    staffMember: String(record?.staffMember || '').trim(),
+    timestamp: String(record?.timestamp || createdAt).trim(),
+    createdAt,
+  };
+}
+
 function compareStudentIds(left, right) {
   const leftMatch = String(left?.id || '').match(/st-(\d+)/i);
   const rightMatch = String(right?.id || '').match(/st-(\d+)/i);
@@ -656,6 +677,13 @@ export async function fetchMedicineLogsFromFirestore() {
     .sort(compareNewestFirst);
 }
 
+export async function fetchGeneralLogsFromFirestore() {
+  const snapshot = await getDocs(schoolCollectionRef(activeSchoolId, GENERAL_LOGS_COLLECTION));
+  return snapshot.docs
+    .map((documentSnapshot) => normalizeGeneralLog(documentSnapshot.data() || {}, documentSnapshot.id))
+    .sort(compareNewestFirst);
+}
+
 async function getNextStudentId() {
   const students = await fetchStudentsFromFirestore();
   let highest = 0;
@@ -749,6 +777,23 @@ export async function saveMedicineLogToFirestore(payload = {}, student = null) {
   return normalized;
 }
 
+export async function saveGeneralLogToFirestore(payload = {}, student = null) {
+  const studentName = student
+    ? `${String(student?.firstName || '').trim()} ${String(student?.lastName || '').trim()}`.trim()
+    : String(payload?.studentName || '').trim();
+  const createdAt = new Date().toISOString();
+  const normalized = normalizeGeneralLog({
+    ...payload,
+    id: createRecordId('gen'),
+    studentName,
+    timestamp: createdAt,
+    createdAt,
+  });
+
+  await setDoc(schoolDocRef(activeSchoolId, GENERAL_LOGS_COLLECTION, normalized.id), normalized, { merge: true });
+  return normalized;
+}
+
 export async function seedStudentsToFirestore(students = []) {
   if (!Array.isArray(students) || students.length === 0) {
     return 0;
@@ -839,6 +884,31 @@ export async function seedMedicineLogsToFirestore(records = []) {
     }
 
     batch.set(schoolDocRef(activeSchoolId, MEDICINE_LOGS_COLLECTION, normalized.id), normalized, { merge: true });
+    count += 1;
+  });
+
+  if (count > 0) {
+    await batch.commit();
+  }
+
+  return count;
+}
+
+export async function seedGeneralLogsToFirestore(records = []) {
+  if (!Array.isArray(records) || records.length === 0) {
+    return 0;
+  }
+
+  const batch = writeBatch(db);
+  let count = 0;
+
+  records.forEach((record) => {
+    const normalized = normalizeGeneralLog(record);
+    if (!normalized.id) {
+      return;
+    }
+
+    batch.set(schoolDocRef(activeSchoolId, GENERAL_LOGS_COLLECTION, normalized.id), normalized, { merge: true });
     count += 1;
   });
 
