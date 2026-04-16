@@ -58,7 +58,12 @@ import {
   getCurrentSchoolConfig,
   updateCurrentUserCredentials,
   updateCurrentSchoolFeatures,
+  updateCurrentSchoolEditDataPassword,
   updateCurrentSchoolMedicalVaultPassword,
+  updateAttendanceEntryInFirestore,
+  updateGeneralLogInFirestore,
+  updateIncidentInFirestore,
+  updateMedicineLogInFirestore,
   updateUserAccessProfile,
 } from './firebaseConfig';
 import styles from './styles/appStyles';
@@ -789,6 +794,22 @@ async function saveGeneralLogRecord(payload, student = null) {
   }
 }
 
+async function updateAttendanceHistoryEntry(entryId, updates = {}) {
+  return updateAttendanceEntryInFirestore(entryId, updates);
+}
+
+async function updateIncidentHistoryEntry(entryId, updates = {}) {
+  return updateIncidentInFirestore(entryId, updates);
+}
+
+async function updateMedicineHistoryEntry(entryId, updates = {}) {
+  return updateMedicineLogInFirestore(entryId, updates);
+}
+
+async function updateGeneralHistoryEntry(entryId, updates = {}) {
+  return updateGeneralLogInFirestore(entryId, updates);
+}
+
 function LoginScreen({ onLogin, isBusy }) {
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
@@ -1431,7 +1452,10 @@ function ProfileSettingsScreen() {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [medicalVaultPassword, setMedicalVaultPassword] = useState('');
   const [initialMedicalVaultPassword, setInitialMedicalVaultPassword] = useState('');
+  const [editDataPassword, setEditDataPassword] = useState('');
+  const [initialEditDataPassword, setInitialEditDataPassword] = useState('');
   const [isMedicalVaultPasswordVisible, setIsMedicalVaultPasswordVisible] = useState(false);
+  const [isEditDataPasswordVisible, setIsEditDataPasswordVisible] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
@@ -1445,6 +1469,9 @@ function ProfileSettingsScreen() {
         const current = String(config?.medicalVaultPassword || '').trim();
         setMedicalVaultPassword(current);
         setInitialMedicalVaultPassword(current);
+        const currentEditPassword = String(config?.editDataPassword || '').trim();
+        setEditDataPassword(currentEditPassword);
+        setInitialEditDataPassword(currentEditPassword);
       } catch (_error) {
         // No-op: profile settings still usable without this field load.
       }
@@ -1462,11 +1489,13 @@ function ProfileSettingsScreen() {
     const trimmedPassword = String(newPassword || '').trim();
     const trimmedConfirm = String(confirmPassword || '').trim();
     const trimmedVaultPassword = String(medicalVaultPassword || '').trim();
+    const trimmedEditDataPassword = String(editDataPassword || '').trim();
     const vaultPasswordChanged = canManageUsers && trimmedVaultPassword !== String(initialMedicalVaultPassword || '').trim();
+    const editPasswordChanged = canManageUsers && trimmedEditDataPassword !== String(initialEditDataPassword || '').trim();
     const hasCredentialChanges = Boolean(trimmedEmail || trimmedPassword);
 
-    if (!hasCredentialChanges && !vaultPasswordChanged) {
-      Alert.alert('No Changes', 'Update your profile settings or Medical Aid Vault password before saving.');
+    if (!hasCredentialChanges && !vaultPasswordChanged && !editPasswordChanged) {
+      Alert.alert('No Changes', 'Update your profile settings, Medical Aid Vault password, or Edit Data password before saving.');
       return;
     }
 
@@ -1499,6 +1528,13 @@ function ProfileSettingsScreen() {
         const current = String(nextSchoolConfig?.medicalVaultPassword || '').trim();
         setMedicalVaultPassword(current);
         setInitialMedicalVaultPassword(current);
+      }
+
+      if (editPasswordChanged) {
+        const nextSchoolConfig = await updateCurrentSchoolEditDataPassword(trimmedEditDataPassword, accessProfile?.uid || '');
+        const current = String(nextSchoolConfig?.editDataPassword || '').trim();
+        setEditDataPassword(current);
+        setInitialEditDataPassword(current);
       }
 
       Alert.alert('Updated', 'Your profile settings were updated successfully.');
@@ -1545,6 +1581,26 @@ function ProfileSettingsScreen() {
               </Text>
             </TouchableOpacity>
             <Text style={styles.tapHint}>This password is shared across principal/admin and required for staff to unlock Medical Aid Vault.</Text>
+
+            <Text style={styles.formSectionLabel}>Learner History Edit Password</Text>
+            <TextInput
+              style={styles.formInput}
+              placeholder="Set shared edit-data password"
+              placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+              value={editDataPassword}
+              onChangeText={setEditDataPassword}
+              autoCapitalize="none"
+              secureTextEntry={!isEditDataPasswordVisible}
+            />
+            <TouchableOpacity
+              style={styles.modalButtonSecondary}
+              onPress={() => setIsEditDataPasswordVisible((current) => !current)}
+            >
+              <Text style={styles.modalButtonSecondaryText}>
+                {isEditDataPasswordVisible ? 'Hide Edit Password' : 'Show Edit Password'}
+              </Text>
+            </TouchableOpacity>
+            <Text style={styles.tapHint}>Staff must enter this password before editing attendance, incident, medicine, or general entries in learner history popups.</Text>
           </>
         ) : null}
 
@@ -3115,11 +3171,33 @@ function EmergencyProfileScreen({ route, navigation }) {
   const [parentAbsentSaving, setParentAbsentSaving] = useState(false);
   const [showParentAbsentDatePicker, setShowParentAbsentDatePicker] = useState(false);
   const [schoolMedicalVaultPassword, setSchoolMedicalVaultPassword] = useState('');
+  const [schoolEditDataPassword, setSchoolEditDataPassword] = useState('');
   const [attendanceHistory, setAttendanceHistory] = useState([]);
   const [incidentHistory, setIncidentHistory] = useState([]);
   const [medicineHistory, setMedicineHistory] = useState([]);
   const [generalHistory, setGeneralHistory] = useState([]);
   const [activeHistoryModal, setActiveHistoryModal] = useState('');
+  const [historyModalToRestore, setHistoryModalToRestore] = useState('');
+  const [isEditAuthModalVisible, setIsEditAuthModalVisible] = useState(false);
+  const [editAuthInput, setEditAuthInput] = useState('');
+  const [editAuthError, setEditAuthError] = useState('');
+  const [pendingEditType, setPendingEditType] = useState('');
+  const [entryBeingEdited, setEntryBeingEdited] = useState(null);
+  const [isEditEntryModalVisible, setIsEditEntryModalVisible] = useState(false);
+  const [isSavingEntryEdit, setIsSavingEntryEdit] = useState(false);
+  const [editStatus, setEditStatus] = useState('Absent');
+  const [editDate, setEditDate] = useState('');
+  const [editTime, setEditTime] = useState('');
+  const [editReason, setEditReason] = useState('');
+  const [editLocation, setEditLocation] = useState('');
+  const [editDescription, setEditDescription] = useState('');
+  const [editActionTaken, setEditActionTaken] = useState('');
+  const [editWitness, setEditWitness] = useState('');
+  const [editMedicationName, setEditMedicationName] = useState('');
+  const [editDosage, setEditDosage] = useState('');
+  const [editStaffMember, setEditStaffMember] = useState('');
+  const [editSubject, setEditSubject] = useState('');
+  const [editNote, setEditNote] = useState('');
   const emergencyContacts = Array.isArray(student.emergencyContacts) ? student.emergencyContacts : [];
   const allergies = String(student.allergies || '').trim().toLowerCase();
   const hasCriticalAllergy = allergies && allergies !== 'none' && allergies !== 'no known allergies';
@@ -3437,8 +3515,12 @@ function EmergencyProfileScreen({ route, navigation }) {
         const schoolConfig = await getCurrentSchoolConfig();
         if (!isMounted) return;
         setSchoolMedicalVaultPassword(String(schoolConfig?.medicalVaultPassword || '').trim());
+        setSchoolEditDataPassword(String(schoolConfig?.editDataPassword || '').trim());
       } catch (_error) {
-        if (isMounted) setSchoolMedicalVaultPassword('');
+        if (isMounted) {
+          setSchoolMedicalVaultPassword('');
+          setSchoolEditDataPassword('');
+        }
       }
     };
 
@@ -3503,6 +3585,215 @@ function EmergencyProfileScreen({ route, navigation }) {
       isActive = false;
     };
   }, [isParentAccount, student?.id, accessProfile]);
+
+  const getDateAndTimeParts = (value) => {
+    const fallbackDate = getCurrentLocalDateString();
+    const fallbackTime = getCurrentLocalTimeString();
+    if (!value) {
+      return { date: fallbackDate, time: fallbackTime };
+    }
+
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) {
+      return { date: fallbackDate, time: fallbackTime };
+    }
+
+    const datePart = `${parsed.getFullYear()}-${String(parsed.getMonth() + 1).padStart(2, '0')}-${String(parsed.getDate()).padStart(2, '0')}`;
+    const timePart = `${String(parsed.getHours()).padStart(2, '0')}:${String(parsed.getMinutes()).padStart(2, '0')}`;
+    return { date: datePart, time: timePart };
+  };
+
+  const closeEditAuthModal = () => {
+    setIsEditAuthModalVisible(false);
+    setEditAuthInput('');
+    setEditAuthError('');
+    setPendingEditType('');
+    setEntryBeingEdited(null);
+    if (historyModalToRestore) {
+      setActiveHistoryModal(historyModalToRestore);
+      setHistoryModalToRestore('');
+    }
+  };
+
+  const closeEditEntryModal = () => {
+    const modalKeyToRestore = historyModalToRestore;
+    setIsEditEntryModalVisible(false);
+    setEntryBeingEdited(null);
+    setPendingEditType('');
+    setEditStatus('Absent');
+    setEditDate('');
+    setEditTime('');
+    setEditReason('');
+    setEditLocation('');
+    setEditDescription('');
+    setEditActionTaken('');
+    setEditWitness('');
+    setEditMedicationName('');
+    setEditDosage('');
+    setEditStaffMember('');
+    setEditSubject('');
+    setEditNote('');
+    if (modalKeyToRestore) {
+      setActiveHistoryModal(modalKeyToRestore);
+      setHistoryModalToRestore('');
+    }
+  };
+
+  const populateEntryEditForm = (entryType, entry) => {
+    const rawDateTime = entryType === 'medicine'
+      ? (entry?.timeAdministered || entry?.createdAt)
+      : (entry?.occurredAt || entry?.timestamp || entry?.createdAt);
+    const { date, time } = getDateAndTimeParts(rawDateTime);
+    setPendingEditType(entryType);
+    setEntryBeingEdited(entry);
+    setEditDate(date);
+    setEditTime(time);
+
+    if (entryType === 'attendance') {
+      const normalizedStatus = String(entry?.status || 'Absent').trim();
+      setEditStatus(['Absent', 'Late'].includes(normalizedStatus) ? normalizedStatus : 'Absent');
+      setEditReason(String(entry?.reason || '').trim());
+      setEditDate(String(entry?.date || date).trim());
+    } else if (entryType === 'incidents') {
+      setEditLocation(String(entry?.location || '').trim());
+      setEditDescription(String(entry?.description || '').trim());
+      setEditActionTaken(String(entry?.actionTaken || '').trim());
+      setEditWitness(String(entry?.witness || '').trim());
+    } else if (entryType === 'medicine') {
+      setEditMedicationName(String(entry?.medicationName || '').trim());
+      setEditDosage(String(entry?.dosage || '').trim());
+      setEditStaffMember(String(entry?.staffMember || '').trim());
+    } else if (entryType === 'general') {
+      setEditSubject(String(entry?.subject || '').trim());
+      setEditNote(String(entry?.note || '').trim());
+      setEditStaffMember(String(entry?.staffMember || '').trim());
+    }
+
+    setIsEditEntryModalVisible(true);
+  };
+
+  const handleRequestEntryEdit = (entryType, entry) => {
+    const expectedPassword = String(schoolEditDataPassword || '').trim();
+    if (!expectedPassword) {
+      Alert.alert('Set Password First', 'Principal/admin must set Learner History Edit Password in Profile & Settings before edits are allowed.');
+      return;
+    }
+
+    const currentHistoryModal = String(activeHistoryModal || '').trim();
+    if (currentHistoryModal) {
+      setHistoryModalToRestore(currentHistoryModal);
+      setActiveHistoryModal('');
+    }
+
+    setPendingEditType(entryType);
+    setEntryBeingEdited(entry);
+    setEditAuthInput('');
+    setEditAuthError('');
+    setTimeout(() => {
+      setIsEditAuthModalVisible(true);
+    }, 50);
+  };
+
+  const handleVerifyEditPassword = () => {
+    const expectedPassword = String(schoolEditDataPassword || '').trim();
+    if (editAuthInput.trim() !== expectedPassword) {
+      setEditAuthError('Incorrect password. Please try again.');
+      return;
+    }
+
+    const nextType = pendingEditType;
+    const nextEntry = entryBeingEdited;
+    setIsEditAuthModalVisible(false);
+    setEditAuthInput('');
+    setEditAuthError('');
+    if (nextType && nextEntry) {
+      populateEntryEditForm(nextType, nextEntry);
+    }
+  };
+
+  const handleSaveEditedEntry = async () => {
+    if (!entryBeingEdited?.id || !pendingEditType) {
+      return;
+    }
+
+    try {
+      setIsSavingEntryEdit(true);
+
+      if (pendingEditType === 'attendance') {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(editDate)) {
+          Alert.alert('Invalid Date', 'Use date format YYYY-MM-DD.');
+          return;
+        }
+
+        const nextStatus = ['Absent', 'Late'].includes(editStatus) ? editStatus : 'Absent';
+        const updatedEntry = await updateAttendanceHistoryEntry(entryBeingEdited.id, {
+          date: editDate,
+          status: nextStatus,
+          reason: String(editReason || '').trim(),
+        });
+
+        setAttendanceHistory((current) => current
+          .map((item) => (item.id === updatedEntry.id ? updatedEntry : item))
+          .filter((item) => ['Absent', 'Late'].includes(String(item?.status || '').trim())));
+      }
+
+      if (pendingEditType === 'incidents') {
+        const occurredAt = buildIncidentOccurredAt(editDate, editTime);
+        if (!occurredAt) {
+          Alert.alert('Invalid Time', 'Enter a valid date and time in 24-hour format (HH:MM).');
+          return;
+        }
+
+        const updatedEntry = await updateIncidentHistoryEntry(entryBeingEdited.id, {
+          location: String(editLocation || '').trim(),
+          description: String(editDescription || '').trim(),
+          actionTaken: String(editActionTaken || '').trim(),
+          witness: String(editWitness || '').trim(),
+          occurredAt,
+        });
+        setIncidentHistory((current) => current.map((item) => (item.id === updatedEntry.id ? updatedEntry : item)));
+      }
+
+      if (pendingEditType === 'medicine') {
+        const timeAdministered = buildIncidentOccurredAt(editDate, editTime);
+        if (!timeAdministered) {
+          Alert.alert('Invalid Time', 'Enter a valid date and time in 24-hour format (HH:MM).');
+          return;
+        }
+
+        const updatedEntry = await updateMedicineHistoryEntry(entryBeingEdited.id, {
+          medicationName: String(editMedicationName || '').trim(),
+          dosage: String(editDosage || '').trim(),
+          staffMember: String(editStaffMember || '').trim(),
+          timeAdministered,
+        });
+        setMedicineHistory((current) => current.map((item) => (item.id === updatedEntry.id ? updatedEntry : item)));
+      }
+
+      if (pendingEditType === 'general') {
+        const occurredAt = buildIncidentOccurredAt(editDate, editTime);
+        if (!occurredAt) {
+          Alert.alert('Invalid Time', 'Enter a valid date and time in 24-hour format (HH:MM).');
+          return;
+        }
+
+        const updatedEntry = await updateGeneralHistoryEntry(entryBeingEdited.id, {
+          subject: String(editSubject || '').trim(),
+          note: String(editNote || '').trim(),
+          staffMember: String(editStaffMember || '').trim(),
+          occurredAt,
+        });
+        setGeneralHistory((current) => current.map((item) => (item.id === updatedEntry.id ? updatedEntry : item)));
+      }
+
+      closeEditEntryModal();
+      Alert.alert('Updated', 'Entry updated successfully.');
+    } catch (error) {
+      Alert.alert('Update Failed', error.message || 'Could not update this entry.');
+    } finally {
+      setIsSavingEntryEdit(false);
+    }
+  };
 
   return (
     <SafeAreaView style={styles.container}>
@@ -3678,7 +3969,12 @@ function EmergencyProfileScreen({ route, navigation }) {
         >
           {!historyLoading && attendanceHistory.length > 0 ? attendanceHistory.map((entry) => (
             <View key={entry.id} style={styles.timelineCard}>
-              <Text style={styles.studentName}>{entry.status}</Text>
+              <View style={styles.timelineCardHeader}>
+                <Text style={styles.studentName}>{entry.status}</Text>
+                <TouchableOpacity style={styles.timelineEditButton} onPress={() => handleRequestEntryEdit('attendance', entry)}>
+                  <Text style={styles.timelineEditButtonText}>Edit</Text>
+                </TouchableOpacity>
+              </View>
               <Text style={styles.timelineMeta}>{entry.date || formatDateTime(entry.createdAt)} • {entry.className || getClassroomName(student)}</Text>
               {entry.reason ? <Text style={styles.timelineText}>Reason: {entry.reason}</Text> : null}
             </View>
@@ -3694,7 +3990,12 @@ function EmergencyProfileScreen({ route, navigation }) {
         >
           {!historyLoading && incidentHistory.length > 0 ? incidentHistory.map((entry) => (
             <View key={entry.id} style={styles.timelineCard}>
-              <Text style={styles.studentName}>{entry.location || 'Incident'}</Text>
+              <View style={styles.timelineCardHeader}>
+                <Text style={styles.studentName}>{entry.location || 'Incident'}</Text>
+                <TouchableOpacity style={styles.timelineEditButton} onPress={() => handleRequestEntryEdit('incidents', entry)}>
+                  <Text style={styles.timelineEditButtonText}>Edit</Text>
+                </TouchableOpacity>
+              </View>
               <Text style={styles.timelineMeta}>Happened: {formatDateTime(entry.occurredAt || entry.timestamp)}</Text>
               <Text style={styles.tapHint}>Logged: {formatDateTime(entry.createdAt || entry.timestamp)}</Text>
               <Text style={styles.timelineText}>{entry.description}</Text>
@@ -3712,7 +4013,12 @@ function EmergencyProfileScreen({ route, navigation }) {
         >
           {!historyLoading && medicineHistory.length > 0 ? medicineHistory.map((entry) => (
             <View key={entry.id} style={styles.timelineCard}>
-              <Text style={styles.studentName}>{entry.medicationName || 'Medication'}</Text>
+              <View style={styles.timelineCardHeader}>
+                <Text style={styles.studentName}>{entry.medicationName || 'Medication'}</Text>
+                <TouchableOpacity style={styles.timelineEditButton} onPress={() => handleRequestEntryEdit('medicine', entry)}>
+                  <Text style={styles.timelineEditButtonText}>Edit</Text>
+                </TouchableOpacity>
+              </View>
               <Text style={styles.timelineMeta}>Given: {formatDateTime(entry.timeAdministered)}</Text>
               <Text style={styles.tapHint}>Logged: {formatDateTime(entry.createdAt || entry.timeAdministered)}</Text>
               <Text style={styles.timelineText}>Dosage: {entry.dosage || 'Not recorded'}</Text>
@@ -3730,7 +4036,12 @@ function EmergencyProfileScreen({ route, navigation }) {
         >
           {!historyLoading && generalHistory.length > 0 ? generalHistory.map((entry) => (
             <View key={entry.id} style={styles.timelineCard}>
-              <Text style={styles.studentName}>{entry.subject || 'General communication'}</Text>
+              <View style={styles.timelineCardHeader}>
+                <Text style={styles.studentName}>{entry.subject || 'General communication'}</Text>
+                <TouchableOpacity style={styles.timelineEditButton} onPress={() => handleRequestEntryEdit('general', entry)}>
+                  <Text style={styles.timelineEditButtonText}>Edit</Text>
+                </TouchableOpacity>
+              </View>
               <Text style={styles.timelineMeta}>Happened: {formatDateTime(entry.occurredAt || entry.timestamp)}</Text>
               <Text style={styles.tapHint}>Logged: {formatDateTime(entry.createdAt || entry.timestamp)}</Text>
               <Text style={styles.timelineText}>{entry.note || 'Not recorded'}</Text>
@@ -3738,6 +4049,244 @@ function EmergencyProfileScreen({ route, navigation }) {
             </View>
           )) : null}
         </LearnerHistoryModal>
+
+        <Modal
+          visible={isEditAuthModalVisible}
+          transparent
+          animationType="fade"
+          onRequestClose={closeEditAuthModal}
+        >
+          <View style={styles.modalBackdrop}>
+            <View style={styles.modalCard}>
+              <Text style={styles.modalTitle}>Enter Edit Password</Text>
+              <Text style={styles.modalText}>Enter the shared Learner History Edit Password to continue.</Text>
+
+              <TextInput
+                style={styles.pinInput}
+                value={editAuthInput}
+                onChangeText={(text) => {
+                  setEditAuthInput(text);
+                  setEditAuthError('');
+                }}
+                placeholder="Edit data password"
+                secureTextEntry
+                autoCapitalize="none"
+              />
+
+              {editAuthError ? <Text style={styles.errorText}>{editAuthError}</Text> : null}
+
+              <View style={styles.modalButtonsRow}>
+                <TouchableOpacity style={styles.modalButtonSecondary} onPress={closeEditAuthModal}>
+                  <Text style={styles.modalButtonSecondaryText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.modalButtonPrimary} onPress={handleVerifyEditPassword}>
+                  <Text style={styles.modalButtonPrimaryText}>Verify</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </Modal>
+
+        <Modal
+          visible={isEditEntryModalVisible}
+          transparent
+          animationType="fade"
+          onRequestClose={closeEditEntryModal}
+        >
+          <View style={styles.modalBackdrop}>
+            <View style={styles.modalCard}>
+              <Text style={styles.modalTitle}>Edit Entry</Text>
+              <ScrollView
+                style={styles.modalScrollContent}
+                contentContainerStyle={styles.modalScrollContentInner}
+                keyboardShouldPersistTaps="handled"
+                nestedScrollEnabled
+                showsVerticalScrollIndicator
+              >
+                {pendingEditType === 'attendance' ? (
+                  <>
+                    <Text style={styles.formSectionLabel}>Status</Text>
+                    <View style={styles.actionRow}>
+                      {['Absent', 'Late'].map((value) => (
+                        <TouchableOpacity
+                          key={value}
+                          style={[
+                            styles.statusActionButton,
+                            editStatus === value && styles.statusActionButtonSelected,
+                          ]}
+                          onPress={() => setEditStatus(value)}
+                        >
+                          <Text style={[styles.statusActionButtonText, editStatus === value && styles.selectedActionText]}>{value}</Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                    <TextInput
+                      style={styles.formInput}
+                      placeholder="Date (YYYY-MM-DD)"
+                      placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+                      value={editDate}
+                      onChangeText={setEditDate}
+                      autoCapitalize="none"
+                    />
+                    <TextInput
+                      style={[styles.formInput, styles.reasonInput]}
+                      placeholder="Reason"
+                      placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+                      value={editReason}
+                      onChangeText={setEditReason}
+                      multiline
+                    />
+                  </>
+                ) : null}
+
+                {pendingEditType === 'incidents' ? (
+                  <>
+                    <TextInput
+                      style={styles.formInput}
+                      placeholder="Location"
+                      placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+                      value={editLocation}
+                      onChangeText={setEditLocation}
+                    />
+                    <TextInput
+                      style={styles.formInput}
+                      placeholder="Date happened (YYYY-MM-DD)"
+                      placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+                      value={editDate}
+                      onChangeText={setEditDate}
+                      autoCapitalize="none"
+                    />
+                    <TextInput
+                      style={styles.formInput}
+                      placeholder="Time happened (HH:MM)"
+                      placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+                      value={editTime}
+                      onChangeText={setEditTime}
+                    />
+                    <TextInput
+                      style={[styles.formInput, styles.reasonInput]}
+                      placeholder="Description"
+                      placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+                      value={editDescription}
+                      onChangeText={setEditDescription}
+                      multiline
+                    />
+                    <TextInput
+                      style={styles.formInput}
+                      placeholder="Action taken"
+                      placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+                      value={editActionTaken}
+                      onChangeText={setEditActionTaken}
+                    />
+                    <TextInput
+                      style={styles.formInput}
+                      placeholder="Witness"
+                      placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+                      value={editWitness}
+                      onChangeText={setEditWitness}
+                    />
+                  </>
+                ) : null}
+
+                {pendingEditType === 'medicine' ? (
+                  <>
+                    <TextInput
+                      style={styles.formInput}
+                      placeholder="Medication name"
+                      placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+                      value={editMedicationName}
+                      onChangeText={setEditMedicationName}
+                    />
+                    <TextInput
+                      style={styles.formInput}
+                      placeholder="Date given (YYYY-MM-DD)"
+                      placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+                      value={editDate}
+                      onChangeText={setEditDate}
+                      autoCapitalize="none"
+                    />
+                    <TextInput
+                      style={styles.formInput}
+                      placeholder="Time given (HH:MM)"
+                      placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+                      value={editTime}
+                      onChangeText={setEditTime}
+                    />
+                    <TextInput
+                      style={styles.formInput}
+                      placeholder="Dosage"
+                      placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+                      value={editDosage}
+                      onChangeText={setEditDosage}
+                    />
+                    <TextInput
+                      style={styles.formInput}
+                      placeholder="Staff member"
+                      placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+                      value={editStaffMember}
+                      onChangeText={setEditStaffMember}
+                    />
+                  </>
+                ) : null}
+
+                {pendingEditType === 'general' ? (
+                  <>
+                    <TextInput
+                      style={styles.formInput}
+                      placeholder="Subject"
+                      placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+                      value={editSubject}
+                      onChangeText={setEditSubject}
+                    />
+                    <TextInput
+                      style={styles.formInput}
+                      placeholder="Date happened (YYYY-MM-DD)"
+                      placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+                      value={editDate}
+                      onChangeText={setEditDate}
+                      autoCapitalize="none"
+                    />
+                    <TextInput
+                      style={styles.formInput}
+                      placeholder="Time happened (HH:MM)"
+                      placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+                      value={editTime}
+                      onChangeText={setEditTime}
+                    />
+                    <TextInput
+                      style={[styles.formInput, styles.reasonInput]}
+                      placeholder="Note"
+                      placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+                      value={editNote}
+                      onChangeText={setEditNote}
+                      multiline
+                    />
+                    <TextInput
+                      style={styles.formInput}
+                      placeholder="Staff member"
+                      placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+                      value={editStaffMember}
+                      onChangeText={setEditStaffMember}
+                    />
+                  </>
+                ) : null}
+              </ScrollView>
+
+              <View style={styles.modalButtonsRow}>
+                <TouchableOpacity style={styles.modalButtonSecondary} onPress={closeEditEntryModal}>
+                  <Text style={styles.modalButtonSecondaryText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.modalButtonPrimary, isSavingEntryEdit && styles.saveStudentButtonDisabled]}
+                  onPress={handleSaveEditedEntry}
+                  disabled={isSavingEntryEdit}
+                >
+                  <Text style={styles.modalButtonPrimaryText}>{isSavingEntryEdit ? 'Saving...' : 'Save Changes'}</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </Modal>
 
         <Modal
           visible={isPinModalVisible}

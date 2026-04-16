@@ -148,6 +148,7 @@ async function fetchSchoolConfigById(schoolId) {
       name: buildDefaultSchoolName(normalizedSchoolId),
       features: buildDefaultSchoolFeatures(),
       medicalVaultPassword: '',
+      editDataPassword: '',
       principalUserUid: '',
     };
   }
@@ -158,6 +159,7 @@ async function fetchSchoolConfigById(schoolId) {
     name: String(data?.name || buildDefaultSchoolName(normalizedSchoolId)).trim(),
     features: buildDefaultSchoolFeatures(data?.features || {}),
     medicalVaultPassword: normalizeVaultPassword(data?.medicalVaultPassword),
+    editDataPassword: normalizeVaultPassword(data?.editDataPassword),
     principalUserUid: String(data?.principalUserUid || '').trim(),
   };
 }
@@ -234,6 +236,7 @@ export async function ensureUserAccessProfile(user) {
       principalUserUid: provisionalProfile.role === 'principal' ? provisionalProfile.uid : '',
       features: buildDefaultSchoolFeatures(),
       medicalVaultPassword: '',
+      editDataPassword: '',
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     }, { merge: true });
@@ -1157,6 +1160,126 @@ export async function updateCurrentSchoolMedicalVaultPassword(nextPassword = '',
   }, { merge: true });
 
   return fetchSchoolConfigById(schoolId);
+}
+
+export async function updateCurrentSchoolEditDataPassword(nextPassword = '', principalUid = '') {
+  const schoolId = normalizeSchoolId(activeSchoolId);
+  const currentConfig = await fetchSchoolConfigById(schoolId);
+  const normalizedPassword = normalizeVaultPassword(nextPassword);
+
+  await setDoc(doc(db, SCHOOLS_COLLECTION, schoolId), {
+    id: schoolId,
+    name: currentConfig.name || buildDefaultSchoolName(schoolId),
+    principalUserUid: String(principalUid || currentConfig.principalUserUid || '').trim(),
+    editDataPassword: normalizedPassword,
+    updatedAt: new Date().toISOString(),
+  }, { merge: true });
+
+  return fetchSchoolConfigById(schoolId);
+}
+
+export async function updateAttendanceEntryInFirestore(entryId, updates = {}) {
+  const normalizedId = String(entryId || '').trim();
+  if (!normalizedId) {
+    throw new Error('Attendance entry id is required to update.');
+  }
+
+  const attendanceRef = schoolDocRef(activeSchoolId, ATTENDANCE_COLLECTION, normalizedId);
+  const snapshot = await getDoc(attendanceRef);
+  if (!snapshot.exists()) {
+    throw new Error('Attendance entry not found.');
+  }
+
+  const existing = snapshot.data() || {};
+  const merged = normalizeAttendanceEntry({
+    ...existing,
+    ...(updates && typeof updates === 'object' ? updates : {}),
+    id: normalizedId,
+    createdAt: String(existing?.createdAt || new Date().toISOString()).trim(),
+    updatedAt: new Date().toISOString(),
+  }, normalizedId);
+
+  await setDoc(attendanceRef, merged, { merge: true });
+  return merged;
+}
+
+export async function updateIncidentInFirestore(incidentId, updates = {}) {
+  const normalizedId = String(incidentId || '').trim();
+  if (!normalizedId) {
+    throw new Error('Incident id is required to update.');
+  }
+
+  const incidentRef = schoolDocRef(activeSchoolId, INCIDENTS_COLLECTION, normalizedId);
+  const snapshot = await getDoc(incidentRef);
+  if (!snapshot.exists()) {
+    throw new Error('Incident record not found.');
+  }
+
+  const existing = snapshot.data() || {};
+  const merged = normalizeIncidentRecord({
+    ...existing,
+    ...(updates && typeof updates === 'object' ? updates : {}),
+    id: normalizedId,
+    createdAt: String(existing?.createdAt || existing?.timestamp || new Date().toISOString()).trim(),
+    timestamp: String(existing?.timestamp || existing?.createdAt || new Date().toISOString()).trim(),
+    readOnly: true,
+  }, normalizedId);
+
+  await setDoc(incidentRef, merged, { merge: true });
+  return merged;
+}
+
+export async function updateMedicineLogInFirestore(logId, updates = {}) {
+  const normalizedId = String(logId || '').trim();
+  if (!normalizedId) {
+    throw new Error('Medicine log id is required to update.');
+  }
+
+  const medicineRef = schoolDocRef(activeSchoolId, MEDICINE_LOGS_COLLECTION, normalizedId);
+  const snapshot = await getDoc(medicineRef);
+  if (!snapshot.exists()) {
+    throw new Error('Medicine log entry not found.');
+  }
+
+  const existing = snapshot.data() || {};
+  const nextAllergies = String(updates?.allergies || existing?.allergies || 'None').trim();
+  const nextMedication = String(updates?.medicationName || existing?.medicationName || '').trim();
+  const merged = normalizeMedicineLog({
+    ...existing,
+    ...(updates && typeof updates === 'object' ? updates : {}),
+    id: normalizedId,
+    allergies: nextAllergies,
+    allergyWarning: hasAllergyWarning(nextMedication, nextAllergies),
+    createdAt: String(existing?.createdAt || existing?.timeAdministered || new Date().toISOString()).trim(),
+  }, normalizedId);
+
+  await setDoc(medicineRef, merged, { merge: true });
+  return merged;
+}
+
+export async function updateGeneralLogInFirestore(logId, updates = {}) {
+  const normalizedId = String(logId || '').trim();
+  if (!normalizedId) {
+    throw new Error('General log id is required to update.');
+  }
+
+  const generalRef = schoolDocRef(activeSchoolId, GENERAL_LOGS_COLLECTION, normalizedId);
+  const snapshot = await getDoc(generalRef);
+  if (!snapshot.exists()) {
+    throw new Error('General log entry not found.');
+  }
+
+  const existing = snapshot.data() || {};
+  const merged = normalizeGeneralLog({
+    ...existing,
+    ...(updates && typeof updates === 'object' ? updates : {}),
+    id: normalizedId,
+    createdAt: String(existing?.createdAt || existing?.timestamp || new Date().toISOString()).trim(),
+    timestamp: String(existing?.timestamp || existing?.createdAt || new Date().toISOString()).trim(),
+  }, normalizedId);
+
+  await setDoc(generalRef, merged, { merge: true });
+  return merged;
 }
 
 export async function createManagedUserAccount(payload = {}) {

@@ -778,6 +778,25 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 1 },
     elevation: 1,
   },
+  timelineCardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 10,
+  },
+  timelineEditButton: {
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#1A73E8',
+    borderRadius: 6,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+  },
+  timelineEditButtonText: {
+    color: '#1A73E8',
+    fontWeight: '700',
+    fontSize: 12,
+  },
   timelineMeta: {
     color: '#80868B',
     marginTop: 4,
