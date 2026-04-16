@@ -2091,39 +2091,52 @@ function ManageUsersScreen({ navigation }) {
       return;
     }
 
+    const removeUserNow = async () => {
+      try {
+        setSavingUid(userProfile.uid);
+        await withTimeout(updateUserAccessProfile(userProfile.uid, {
+          email: userProfile.email,
+          displayName: userProfile.displayName,
+          role: userProfile.role,
+          permissions: userProfile.permissions,
+          linkedStudentIds: userProfile.linkedStudentIds || [],
+          assignedClasses: userProfile.assignedClasses || [],
+          isActive: false,
+        }), 12000, 'Could not complete remove user request in time.');
+        setUserProfiles((currentUsers) => currentUsers.filter((currentUser) => currentUser.uid !== userProfile.uid));
+        Alert.alert('Removed', `${userProfile.displayName || userProfile.email} has been removed from staff access.`);
+      } catch (error) {
+        console.error('Remove user error:', error);
+        const message = String(error?.message || '').trim();
+        if (/permission|insufficient/i.test(message)) {
+          Alert.alert('Remove Failed', 'This account does not have permission in Firestore to remove users. Sign in with the principal account and try again.');
+          return;
+        }
+        Alert.alert('Remove Failed', message || 'Could not remove this user. Please try again.');
+      } finally {
+        setSavingUid('');
+      }
+    };
+
+    const promptMessage = `Remove ${userProfile.displayName || userProfile.email || 'this user'} from this school?`;
+    if (Platform.OS === 'web') {
+      const shouldRemove = typeof window !== 'undefined' ? window.confirm(promptMessage) : true;
+      if (shouldRemove) {
+        void removeUserNow();
+      }
+      return;
+    }
+
     Alert.alert(
       'Remove User',
-      `Remove ${userProfile.displayName || userProfile.email || 'this user'} from this school?`,
+      promptMessage,
       [
         { text: 'Cancel', style: 'cancel' },
         {
           text: 'Remove',
           style: 'destructive',
-          onPress: async () => {
-            try {
-              setSavingUid(userProfile.uid);
-              await withTimeout(updateUserAccessProfile(userProfile.uid, {
-                email: userProfile.email,
-                displayName: userProfile.displayName,
-                role: userProfile.role,
-                permissions: userProfile.permissions,
-                linkedStudentIds: userProfile.linkedStudentIds || [],
-                assignedClasses: userProfile.assignedClasses || [],
-                isActive: false,
-              }), 12000, 'Could not complete remove user request in time.');
-              setUserProfiles((currentUsers) => currentUsers.filter((currentUser) => currentUser.uid !== userProfile.uid));
-              Alert.alert('Removed', `${userProfile.displayName || userProfile.email} has been removed from staff access.`);
-            } catch (error) {
-              console.error('Remove user error:', error);
-              const message = String(error?.message || '').trim();
-              if (/permission|insufficient/i.test(message)) {
-                Alert.alert('Remove Failed', 'This account does not have permission in Firestore to remove users. Sign in with the principal account and try again.');
-                return;
-              }
-              Alert.alert('Remove Failed', message || 'Could not remove this user. Please try again.');
-            } finally {
-              setSavingUid('');
-            }
+          onPress: () => {
+            void removeUserNow();
           },
         },
       ],
@@ -3505,22 +3518,35 @@ function EmergencyProfileScreen({ route, navigation }) {
       return;
     }
 
+    const removeStudentNow = async () => {
+      try {
+        await deleteStudentRecord(resolvedStudentId);
+        Alert.alert('Deleted', `${getStudentFullName(student)} has been removed.`);
+        navigation.navigate('StudentDirectory');
+      } catch (error) {
+        Alert.alert('Error', error.message || 'Could not delete student.');
+      }
+    };
+
+    const promptMessage = `Are you sure you want to delete ${getStudentFullName(student)} from the system? This action cannot be undone.`;
+    if (Platform.OS === 'web') {
+      const shouldDelete = typeof window !== 'undefined' ? window.confirm(promptMessage) : true;
+      if (shouldDelete) {
+        void removeStudentNow();
+      }
+      return;
+    }
+
     Alert.alert(
       'Delete Student',
-      `Are you sure you want to delete ${getStudentFullName(student)} from the system? This action cannot be undone.`,
+      promptMessage,
       [
         { text: 'Cancel', style: 'cancel' },
         {
           text: 'Delete',
           style: 'destructive',
-          onPress: async () => {
-            try {
-              await deleteStudentRecord(resolvedStudentId);
-              Alert.alert('Deleted', `${getStudentFullName(student)} has been removed.`);
-              navigation.navigate('StudentDirectory');
-            } catch (error) {
-              Alert.alert('Error', error.message || 'Could not delete student.');
-            }
+          onPress: () => {
+            void removeStudentNow();
           },
         },
       ],
