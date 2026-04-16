@@ -37,6 +37,11 @@ const COMPLIANCE_DOCS_COLLECTION = 'compliance_documents';
 const ACTIVITIES_COLLECTION = 'activities';
 const PRINCIPAL_EMAILS = new Set(['fritzlafras@gmail.com', 'principal@school.com']);
 
+function getCurrentLocalDateString() {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+}
+
 export const DEFAULT_SCHOOL_FEATURE_FLAGS = {
   students: true,
   activities: false,
@@ -526,12 +531,14 @@ function normalizeAttendanceEntry(entry = {}, fallbackId = '') {
 
 function normalizeIncidentRecord(record = {}, fallbackId = '') {
   const createdAt = String(record?.createdAt || record?.timestamp || new Date().toISOString()).trim();
+  const occurredAt = String(record?.occurredAt || record?.incidentAt || record?.timestamp || createdAt).trim();
 
   return {
     schoolId: normalizeSchoolId(record?.schoolId || activeSchoolId),
     id: String(record?.id || fallbackId || createRecordId('inc')).trim(),
     studentId: String(record?.studentId || '').trim(),
     studentName: String(record?.studentName || '').trim(),
+    occurredAt,
     timestamp: String(record?.timestamp || createdAt).trim(),
     location: String(record?.location || '').trim(),
     description: String(record?.description || '').trim(),
@@ -544,6 +551,7 @@ function normalizeIncidentRecord(record = {}, fallbackId = '') {
 
 function normalizeMedicineLog(record = {}, fallbackId = '') {
   const createdAt = String(record?.createdAt || record?.timeAdministered || new Date().toISOString()).trim();
+  const timeAdministered = String(record?.timeAdministered || record?.administeredAt || createdAt).trim();
 
   return {
     schoolId: normalizeSchoolId(record?.schoolId || activeSchoolId),
@@ -555,13 +563,14 @@ function normalizeMedicineLog(record = {}, fallbackId = '') {
     staffMember: String(record?.staffMember || '').trim(),
     allergies: String(record?.allergies || 'None').trim(),
     allergyWarning: Boolean(record?.allergyWarning),
-    timeAdministered: String(record?.timeAdministered || createdAt).trim(),
+    timeAdministered,
     createdAt,
   };
 }
 
 function normalizeGeneralLog(record = {}, fallbackId = '') {
   const createdAt = String(record?.createdAt || record?.timestamp || new Date().toISOString()).trim();
+  const occurredAt = String(record?.occurredAt || record?.communicationAt || record?.timestamp || createdAt).trim();
 
   return {
     schoolId: normalizeSchoolId(record?.schoolId || activeSchoolId),
@@ -571,6 +580,7 @@ function normalizeGeneralLog(record = {}, fallbackId = '') {
     subject: String(record?.subject || '').trim(),
     note: String(record?.note || '').trim(),
     staffMember: String(record?.staffMember || '').trim(),
+    occurredAt,
     timestamp: String(record?.timestamp || createdAt).trim(),
     createdAt,
   };
@@ -663,8 +673,40 @@ export async function fetchAllAttendanceFromFirestore() {
     .sort(compareNewestFirst);
 }
 
+export async function fetchAttendanceHistoryForStudentFromFirestore(studentId) {
+  const normalizedStudentId = String(studentId || '').trim();
+  if (!normalizedStudentId) {
+    return [];
+  }
+
+  const attendanceQuery = query(
+    schoolCollectionRef(activeSchoolId, ATTENDANCE_COLLECTION),
+    where('studentId', '==', normalizedStudentId),
+  );
+  const snapshot = await getDocs(attendanceQuery);
+  return snapshot.docs
+    .map((documentSnapshot) => normalizeAttendanceEntry(documentSnapshot.data() || {}, documentSnapshot.id))
+    .sort(compareNewestFirst);
+}
+
 export async function fetchIncidentsFromFirestore() {
   const snapshot = await getDocs(schoolCollectionRef(activeSchoolId, INCIDENTS_COLLECTION));
+  return snapshot.docs
+    .map((documentSnapshot) => normalizeIncidentRecord(documentSnapshot.data() || {}, documentSnapshot.id))
+    .sort(compareNewestFirst);
+}
+
+export async function fetchIncidentsForStudentFromFirestore(studentId) {
+  const normalizedStudentId = String(studentId || '').trim();
+  if (!normalizedStudentId) {
+    return [];
+  }
+
+  const incidentQuery = query(
+    schoolCollectionRef(activeSchoolId, INCIDENTS_COLLECTION),
+    where('studentId', '==', normalizedStudentId),
+  );
+  const snapshot = await getDocs(incidentQuery);
   return snapshot.docs
     .map((documentSnapshot) => normalizeIncidentRecord(documentSnapshot.data() || {}, documentSnapshot.id))
     .sort(compareNewestFirst);
@@ -677,8 +719,40 @@ export async function fetchMedicineLogsFromFirestore() {
     .sort(compareNewestFirst);
 }
 
+export async function fetchMedicineLogsForStudentFromFirestore(studentId) {
+  const normalizedStudentId = String(studentId || '').trim();
+  if (!normalizedStudentId) {
+    return [];
+  }
+
+  const medicineQuery = query(
+    schoolCollectionRef(activeSchoolId, MEDICINE_LOGS_COLLECTION),
+    where('studentId', '==', normalizedStudentId),
+  );
+  const snapshot = await getDocs(medicineQuery);
+  return snapshot.docs
+    .map((documentSnapshot) => normalizeMedicineLog(documentSnapshot.data() || {}, documentSnapshot.id))
+    .sort(compareNewestFirst);
+}
+
 export async function fetchGeneralLogsFromFirestore() {
   const snapshot = await getDocs(schoolCollectionRef(activeSchoolId, GENERAL_LOGS_COLLECTION));
+  return snapshot.docs
+    .map((documentSnapshot) => normalizeGeneralLog(documentSnapshot.data() || {}, documentSnapshot.id))
+    .sort(compareNewestFirst);
+}
+
+export async function fetchGeneralLogsForStudentFromFirestore(studentId) {
+  const normalizedStudentId = String(studentId || '').trim();
+  if (!normalizedStudentId) {
+    return [];
+  }
+
+  const generalQuery = query(
+    schoolCollectionRef(activeSchoolId, GENERAL_LOGS_COLLECTION),
+    where('studentId', '==', normalizedStudentId),
+  );
+  const snapshot = await getDocs(generalQuery);
   return snapshot.docs
     .map((documentSnapshot) => normalizeGeneralLog(documentSnapshot.data() || {}, documentSnapshot.id))
     .sort(compareNewestFirst);
@@ -715,6 +789,10 @@ export async function deleteStudentFromFirestore(studentId = '') {
 }
 
 export async function saveAttendanceToFirestore(registerDate, entry, status, reason = '') {
+  if (String(registerDate || '').trim() !== getCurrentLocalDateString()) {
+    throw new Error('Attendance locks at 12:00 AM. Only today\'s attendance can still be updated.');
+  }
+
   const normalizedStatus = String(status || entry?.status || 'Present').trim() || 'Present';
   const keepParentFlag = normalizedStatus === 'Absent' && Boolean(entry?.parentReportedAbsent);
   const normalized = normalizeAttendanceEntry({
@@ -744,10 +822,12 @@ export async function saveIncidentToFirestore(payload = {}, student = null) {
     ? `${String(student?.firstName || '').trim()} ${String(student?.lastName || '').trim()}`.trim()
     : String(payload?.studentName || '').trim();
   const createdAt = new Date().toISOString();
+  const occurredAt = String(payload?.occurredAt || createdAt).trim();
   const normalized = normalizeIncidentRecord({
     ...payload,
     id: createRecordId('inc'),
     studentName,
+    occurredAt,
     timestamp: createdAt,
     createdAt,
     readOnly: true,
@@ -763,13 +843,14 @@ export async function saveMedicineLogToFirestore(payload = {}, student = null) {
     : String(payload?.studentName || '').trim();
   const allergies = String(student?.allergies || payload?.allergies || 'None').trim();
   const createdAt = new Date().toISOString();
+  const timeAdministered = String(payload?.timeAdministered || createdAt).trim();
   const normalized = normalizeMedicineLog({
     ...payload,
     id: createRecordId('med'),
     studentName,
     allergies,
     allergyWarning: hasAllergyWarning(payload?.medicationName || '', allergies),
-    timeAdministered: createdAt,
+    timeAdministered,
     createdAt,
   });
 
@@ -782,10 +863,12 @@ export async function saveGeneralLogToFirestore(payload = {}, student = null) {
     ? `${String(student?.firstName || '').trim()} ${String(student?.lastName || '').trim()}`.trim()
     : String(payload?.studentName || '').trim();
   const createdAt = new Date().toISOString();
+  const occurredAt = String(payload?.occurredAt || createdAt).trim();
   const normalized = normalizeGeneralLog({
     ...payload,
     id: createRecordId('gen'),
     studentName,
+    occurredAt,
     timestamp: createdAt,
     createdAt,
   });

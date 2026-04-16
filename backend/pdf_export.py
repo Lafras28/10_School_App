@@ -135,16 +135,17 @@ def build_compliance_report_pdf(
 
     elements.append(Paragraph('Incident / Accident Register', section_style))
     if incidents:
-        incident_rows = [['Timestamp', 'Learner', 'Location', 'Action Taken', 'Witness']]
+        incident_rows = [['Happened', 'Logged', 'Learner', 'Location', 'Action Taken', 'Witness']]
         for incident in incidents:
             incident_rows.append([
-                _format_date(incident.get('timestamp', '-')),
+                _format_date(incident.get('occurredAt') or incident.get('timestamp', '-')),
+                _format_date(incident.get('createdAt') or incident.get('timestamp', '-')),
                 str(incident.get('studentName') or incident.get('studentId') or 'General incident'),
                 str(incident.get('location', '-')),
                 str(incident.get('actionTaken', '-')),
                 str(incident.get('witness', '-')),
             ])
-        elements.append(_build_table(incident_rows, [34 * mm, 38 * mm, 28 * mm, 48 * mm, 30 * mm]))
+        elements.append(_build_table(incident_rows, [26 * mm, 26 * mm, 34 * mm, 24 * mm, 42 * mm, 24 * mm]))
         elements.append(Spacer(1, 4))
         for incident in incidents:
             elements.append(
@@ -158,32 +159,34 @@ def build_compliance_report_pdf(
 
     elements.append(Paragraph('Medicine Administration Log', section_style))
     if medicine_logs:
-        medicine_rows = [['Timestamp', 'Learner', 'Medication', 'Dosage', 'Staff Member', 'Warning']]
+        medicine_rows = [['Given', 'Logged', 'Learner', 'Medication', 'Dosage', 'Staff Member', 'Warning']]
         for entry in medicine_logs:
             medicine_rows.append([
                 _format_date(entry.get('timeAdministered', '-')),
+                _format_date(entry.get('createdAt') or entry.get('timeAdministered', '-')),
                 str(entry.get('studentName') or entry.get('studentId') or 'Learner'),
                 str(entry.get('medicationName', '-')),
                 str(entry.get('dosage', '-')),
                 str(entry.get('staffMember', '-')),
                 'YES' if entry.get('allergyWarning') else 'No',
             ])
-        elements.append(_build_table(medicine_rows, [34 * mm, 30 * mm, 34 * mm, 20 * mm, 34 * mm, 16 * mm]))
+        elements.append(_build_table(medicine_rows, [22 * mm, 22 * mm, 28 * mm, 28 * mm, 16 * mm, 28 * mm, 12 * mm]))
     else:
         elements.append(Paragraph('No medicine logs were found for the selected date range.', body_style))
 
     elements.append(Paragraph('General Communication Log', section_style))
     if general_logs:
-        general_rows = [['Timestamp', 'Learner', 'Subject', 'Staff Member', 'Note']]
+        general_rows = [['Happened', 'Logged', 'Learner', 'Subject', 'Staff Member', 'Note']]
         for entry in general_logs:
             general_rows.append([
-                _format_date(entry.get('timestamp', '-')),
+                _format_date(entry.get('occurredAt') or entry.get('timestamp', '-')),
+                _format_date(entry.get('createdAt') or entry.get('timestamp', '-')),
                 str(entry.get('studentName') or entry.get('studentId') or 'Learner'),
                 str(entry.get('subject', '-')),
                 str(entry.get('staffMember', '-')),
                 str(entry.get('note', '-')),
             ])
-        elements.append(_build_table(general_rows, [30 * mm, 34 * mm, 36 * mm, 34 * mm, 46 * mm]))
+        elements.append(_build_table(general_rows, [22 * mm, 22 * mm, 28 * mm, 26 * mm, 28 * mm, 42 * mm]))
     else:
         elements.append(Paragraph('No general communication logs were found for the selected date range.', body_style))
 

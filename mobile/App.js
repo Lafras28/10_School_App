@@ -25,12 +25,16 @@ import {
   deleteActivityFromFirestore,
   deleteComplianceDocument,
   deleteStudentFromFirestore,
+  fetchAttendanceHistoryForStudentFromFirestore,
   fetchAllAttendanceFromFirestore,
   fetchActivitiesFromFirestore,
   fetchAttendanceFromFirestore,
   fetchComplianceDocuments,
   fetchGeneralLogsFromFirestore,
+  fetchGeneralLogsForStudentFromFirestore,
+  fetchIncidentsForStudentFromFirestore,
   fetchIncidentsFromFirestore,
+  fetchMedicineLogsForStudentFromFirestore,
   fetchMedicineLogsFromFirestore,
   fetchStudentsFromFirestore,
   fetchUserAccessProfiles,
@@ -91,6 +95,42 @@ const FORM_PLACEHOLDER_COLOR = '#334E68';
 const TODAY = new Date().toISOString().split('T')[0];
 const DEFAULT_SCHOOL_NAME = 'Greenhill';
 const PARENT_ABSENT_REASON = 'Parent marked absent in app';
+
+function getCurrentLocalDateString() {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+}
+
+function getCurrentLocalTimeString() {
+  const now = new Date();
+  return `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+}
+
+function isAttendanceDateEditable(registerDate) {
+  return String(registerDate || '').trim() === getCurrentLocalDateString();
+}
+
+function isValidTimeValue(value) {
+  return /^([01]\d|2[0-3]):([0-5]\d)$/.test(String(value || '').trim());
+}
+
+function buildIncidentOccurredAt(dateValue, timeValue) {
+  const normalizedDate = String(dateValue || '').trim();
+  const normalizedTime = String(timeValue || '').trim();
+  if (!normalizedDate || !isValidTimeValue(normalizedTime)) {
+    return '';
+  }
+
+  const [year, month, day] = normalizedDate.split('-').map((part) => parseInt(part, 10));
+  const [hours, minutes] = normalizedTime.split(':').map((part) => parseInt(part, 10));
+  const occurredAt = new Date(year, (month || 1) - 1, day || 1, hours || 0, minutes || 0, 0, 0);
+
+  if (Number.isNaN(occurredAt.getTime())) {
+    return '';
+  }
+
+  return occurredAt.toISOString();
+}
 const CLASSROOM_OPTIONS = ['All Classes', 'Sunshine Bunnies', 'Rainbow Cubs', 'Little Explorers'];
 const ROLE_OPTIONS = ['principal', 'teacher', 'viewer', 'parent'];
 const COMPLIANCE_FOLDERS = [
@@ -158,18 +198,21 @@ function formatCompactDateDisplay(year, month, day) {
 }
 
 function CompactDatePickerModal({ visible, onClose, onDateSelect, currentYear: cy, currentMonth: cm, currentDay: cd }) {
+  const [tempYear, setTempYear] = useState(String(cy));
   const [tempMonth, setTempMonth] = useState(cm);
   const [tempDay, setTempDay] = useState(cd);
+  const yearOptions = Array.from({ length: 11 }, (_, index) => String(Number(cy) - 5 + index));
   const monthOptions = Array.from({ length: 12 }, (_, i) => String(i + 1).padStart(2, '0'));
   const dayOptions = Array.from({ length: 31 }, (_, i) => String(i + 1).padStart(2, '0'));
 
   useEffect(() => {
+    setTempYear(String(cy));
     setTempMonth(cm);
     setTempDay(cd);
   }, [cy, cm, cd, visible]);
 
   const handleConfirm = () => {
-    onDateSelect(String(cy), tempMonth, tempDay);
+    onDateSelect(tempYear, tempMonth, tempDay);
     onClose();
   };
 
@@ -182,6 +225,12 @@ function CompactDatePickerModal({ visible, onClose, onDateSelect, currentYear: c
             <Text style={styles.datePickerModalTitle}>Select Date</Text>
 
             <View style={styles.compactDatePickerRow}>
+              <CompactDatePickerColumn
+                items={yearOptions}
+                selectedValue={tempYear}
+                onSelect={setTempYear}
+                label="Year"
+              />
               <CompactDatePickerColumn
                 items={monthOptions}
                 selectedValue={tempMonth}
@@ -473,8 +522,13 @@ async function loadAttendanceFromDataStore(registerDate, students = []) {
 }
 
 async function saveAttendanceRecord(registerDate, entry, status, reason = '') {
+  if (!isAttendanceDateEditable(registerDate)) {
+    throw new Error('Attendance locks at 12:00 AM. Only today\'s attendance can still be updated.');
+  }
+
   const normalizedStatus = String(status || entry?.status || 'Present').trim() || 'Present';
   const normalizedReason = ['Absent', 'Late'].includes(normalizedStatus) ? String(reason || '').trim() : '';
+  const clientLocalDate = getCurrentLocalDateString();
   const optimisticEntry = {
     ...entry,
     date: String(registerDate || entry?.date || '').trim(),
@@ -493,7 +547,7 @@ async function saveAttendanceRecord(registerDate, entry, status, reason = '') {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ status: normalizedStatus, reason: normalizedReason }),
+        body: JSON.stringify({ status: normalizedStatus, reason: normalizedReason, clientLocalDate }),
       });
     } catch (backendSyncError) {
       console.warn('Backend attendance sync skipped after Firestore save.', backendSyncError);
@@ -508,7 +562,7 @@ async function saveAttendanceRecord(registerDate, entry, status, reason = '') {
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ status: normalizedStatus, reason: normalizedReason }),
+      body: JSON.stringify({ status: normalizedStatus, reason: normalizedReason, clientLocalDate }),
     });
 
     return data?.entry ? { ...optimisticEntry, ...data.entry } : optimisticEntry;
@@ -603,6 +657,100 @@ async function loadGeneralLogsFromDataStore() {
   }
 
   return nextLogs;
+}
+
+async function loadAttendanceHistoryForStudentFromDataStore(studentId, options = {}) {
+  const normalizedStudentId = String(studentId || '').trim();
+  if (!normalizedStudentId) {
+    return [];
+  }
+
+  const defaultEndDate = TODAY;
+  const defaultStartDate = new Date(Date.now() - (365 * 24 * 60 * 60 * 1000)).toISOString().split('T')[0];
+  const startDate = String(options?.startDate || defaultStartDate).trim();
+  const endDate = String(options?.endDate || defaultEndDate).trim();
+  const mergedEntries = new Map();
+
+  try {
+    const firestoreEntries = await fetchAttendanceHistoryForStudentFromFirestore(normalizedStudentId);
+    firestoreEntries.forEach((entry) => {
+      const key = String(entry?.id || `${entry?.date || ''}_${entry?.studentId || ''}`).trim();
+      if (key) {
+        mergedEntries.set(key, entry);
+      }
+    });
+  } catch (error) {
+    console.warn('Firestore learner attendance history unavailable, checking backend fallback.', error);
+  }
+
+  try {
+    const fallbackData = await fetchJson(
+      `${API_BASE_URL}/attendance/history?studentId=${encodeURIComponent(normalizedStudentId)}&startDate=${encodeURIComponent(startDate)}&endDate=${encodeURIComponent(endDate)}`,
+    );
+    const fallbackEntries = Array.isArray(fallbackData?.entries) ? fallbackData.entries : [];
+    fallbackEntries.forEach((entry) => {
+      const key = String(entry?.id || `${entry?.date || ''}_${entry?.studentId || ''}`).trim();
+      if (!key) {
+        return;
+      }
+
+      mergedEntries.set(key, {
+        ...entry,
+        id: key,
+      });
+    });
+  } catch (error) {
+    console.warn('Backend learner attendance history unavailable.', error);
+  }
+
+  return Array.from(mergedEntries.values())
+    .filter((entry) => String(entry?.studentId || '').trim() === normalizedStudentId)
+    .sort((left, right) => String(right?.date || right?.createdAt || '').localeCompare(String(left?.date || left?.createdAt || '')));
+}
+
+async function loadIncidentsForStudentFromDataStore(studentId) {
+  const normalizedStudentId = String(studentId || '').trim();
+  if (!normalizedStudentId) {
+    return [];
+  }
+
+  try {
+    return await fetchIncidentsForStudentFromFirestore(normalizedStudentId);
+  } catch (error) {
+    console.warn('Firestore learner incidents unavailable, using broader fallback.', error);
+    const incidents = await loadIncidentsFromDataStore();
+    return incidents.filter((entry) => String(entry?.studentId || '').trim() === normalizedStudentId);
+  }
+}
+
+async function loadMedicineLogsForStudentFromDataStore(studentId) {
+  const normalizedStudentId = String(studentId || '').trim();
+  if (!normalizedStudentId) {
+    return [];
+  }
+
+  try {
+    return await fetchMedicineLogsForStudentFromFirestore(normalizedStudentId);
+  } catch (error) {
+    console.warn('Firestore learner medicine logs unavailable, using broader fallback.', error);
+    const logs = await loadMedicineLogsFromDataStore();
+    return logs.filter((entry) => String(entry?.studentId || '').trim() === normalizedStudentId);
+  }
+}
+
+async function loadGeneralLogsForStudentFromDataStore(studentId) {
+  const normalizedStudentId = String(studentId || '').trim();
+  if (!normalizedStudentId) {
+    return [];
+  }
+
+  try {
+    return await fetchGeneralLogsForStudentFromFirestore(normalizedStudentId);
+  } catch (error) {
+    console.warn('Firestore learner general logs unavailable, using broader fallback.', error);
+    const logs = await loadGeneralLogsFromDataStore();
+    return logs.filter((entry) => String(entry?.studentId || '').trim() === normalizedStudentId);
+  }
 }
 
 async function saveMedicineLogRecord(payload, student = null) {
@@ -2262,16 +2410,34 @@ function StudentClassFolderScreen({ route, navigation }) {
   const [incidentDescription, setIncidentDescription] = useState('');
   const [incidentActionTaken, setIncidentActionTaken] = useState('');
   const [incidentWitness, setIncidentWitness] = useState('');
+  const initialIncidentDate = getCurrentLocalDateString();
+  const [incidentOccurredYear, setIncidentOccurredYear] = useState(initialIncidentDate.split('-')[0]);
+  const [incidentOccurredMonth, setIncidentOccurredMonth] = useState(initialIncidentDate.split('-')[1]);
+  const [incidentOccurredDay, setIncidentOccurredDay] = useState(initialIncidentDate.split('-')[2]);
+  const [incidentOccurredTime, setIncidentOccurredTime] = useState(getCurrentLocalTimeString());
+  const [showIncidentOccurredDatePicker, setShowIncidentOccurredDatePicker] = useState(false);
   const [incidentSaving, setIncidentSaving] = useState(false);
   const [medicineStudent, setMedicineStudent] = useState(null);
   const [medicineName, setMedicineName] = useState('');
   const [medicineDosage, setMedicineDosage] = useState('');
   const [medicineStaffMember, setMedicineStaffMember] = useState('');
+  const initialMedicineDate = getCurrentLocalDateString();
+  const [medicineOccurredYear, setMedicineOccurredYear] = useState(initialMedicineDate.split('-')[0]);
+  const [medicineOccurredMonth, setMedicineOccurredMonth] = useState(initialMedicineDate.split('-')[1]);
+  const [medicineOccurredDay, setMedicineOccurredDay] = useState(initialMedicineDate.split('-')[2]);
+  const [medicineOccurredTime, setMedicineOccurredTime] = useState(getCurrentLocalTimeString());
+  const [showMedicineOccurredDatePicker, setShowMedicineOccurredDatePicker] = useState(false);
   const [medicineSaving, setMedicineSaving] = useState(false);
   const [generalStudent, setGeneralStudent] = useState(null);
   const [generalSubject, setGeneralSubject] = useState('');
   const [generalNote, setGeneralNote] = useState('');
   const [generalStaffMember, setGeneralStaffMember] = useState('');
+  const initialGeneralDate = getCurrentLocalDateString();
+  const [generalOccurredYear, setGeneralOccurredYear] = useState(initialGeneralDate.split('-')[0]);
+  const [generalOccurredMonth, setGeneralOccurredMonth] = useState(initialGeneralDate.split('-')[1]);
+  const [generalOccurredDay, setGeneralOccurredDay] = useState(initialGeneralDate.split('-')[2]);
+  const [generalOccurredTime, setGeneralOccurredTime] = useState(getCurrentLocalTimeString());
+  const [showGeneralOccurredDatePicker, setShowGeneralOccurredDatePicker] = useState(false);
   const [generalSaving, setGeneralSaving] = useState(false);
 
   const fetchStudents = useCallback(async () => {
@@ -2393,6 +2559,10 @@ function StudentClassFolderScreen({ route, navigation }) {
     setIncidentDescription('');
     setIncidentActionTaken('');
     setIncidentWitness('');
+    setIncidentOccurredYear(getCurrentLocalDateString().split('-')[0]);
+    setIncidentOccurredMonth(getCurrentLocalDateString().split('-')[1]);
+    setIncidentOccurredDay(getCurrentLocalDateString().split('-')[2]);
+    setIncidentOccurredTime(getCurrentLocalTimeString());
   };
 
   const closeIncidentModal = () => {
@@ -2400,6 +2570,7 @@ function StudentClassFolderScreen({ route, navigation }) {
     setIncidentDescription('');
     setIncidentActionTaken('');
     setIncidentWitness('');
+    setShowIncidentOccurredDatePicker(false);
   };
 
   const handleSaveIncident = async () => {
@@ -2412,6 +2583,18 @@ function StudentClassFolderScreen({ route, navigation }) {
       return;
     }
 
+    const incidentOccurredDate = `${incidentOccurredYear}-${incidentOccurredMonth}-${incidentOccurredDay}`;
+    const occurredAt = buildIncidentOccurredAt(incidentOccurredDate, incidentOccurredTime);
+    if (!occurredAt) {
+      Alert.alert('Time Required', 'Enter the incident time in 24-hour format, for example 14:30.');
+      return;
+    }
+
+    if (new Date(occurredAt).getTime() > Date.now()) {
+      Alert.alert('Date Not Allowed', 'The incident happened time cannot be in the future.');
+      return;
+    }
+
     try {
       setIncidentSaving(true);
       await saveIncidentRecord({
@@ -2420,6 +2603,7 @@ function StudentClassFolderScreen({ route, navigation }) {
         description: incidentDescription.trim(),
         actionTaken: incidentActionTaken.trim(),
         witness: incidentWitness.trim(),
+        occurredAt,
       }, incidentStudent);
 
       closeIncidentModal();
@@ -2441,6 +2625,10 @@ function StudentClassFolderScreen({ route, navigation }) {
     setMedicineName('');
     setMedicineDosage('');
     setMedicineStaffMember('');
+    setMedicineOccurredYear(getCurrentLocalDateString().split('-')[0]);
+    setMedicineOccurredMonth(getCurrentLocalDateString().split('-')[1]);
+    setMedicineOccurredDay(getCurrentLocalDateString().split('-')[2]);
+    setMedicineOccurredTime(getCurrentLocalTimeString());
   };
 
   const closeMedicineModal = () => {
@@ -2448,6 +2636,7 @@ function StudentClassFolderScreen({ route, navigation }) {
     setMedicineName('');
     setMedicineDosage('');
     setMedicineStaffMember('');
+    setShowMedicineOccurredDatePicker(false);
   };
 
   const openGeneralModal = (student) => {
@@ -2460,6 +2649,10 @@ function StudentClassFolderScreen({ route, navigation }) {
     setGeneralSubject('');
     setGeneralNote('');
     setGeneralStaffMember('');
+    setGeneralOccurredYear(getCurrentLocalDateString().split('-')[0]);
+    setGeneralOccurredMonth(getCurrentLocalDateString().split('-')[1]);
+    setGeneralOccurredDay(getCurrentLocalDateString().split('-')[2]);
+    setGeneralOccurredTime(getCurrentLocalTimeString());
   };
 
   const closeGeneralModal = () => {
@@ -2467,6 +2660,7 @@ function StudentClassFolderScreen({ route, navigation }) {
     setGeneralSubject('');
     setGeneralNote('');
     setGeneralStaffMember('');
+    setShowGeneralOccurredDatePicker(false);
   };
 
   const handleSaveMedicine = async () => {
@@ -2479,6 +2673,18 @@ function StudentClassFolderScreen({ route, navigation }) {
       return;
     }
 
+    const medicineOccurredDate = `${medicineOccurredYear}-${medicineOccurredMonth}-${medicineOccurredDay}`;
+    const timeAdministered = buildIncidentOccurredAt(medicineOccurredDate, medicineOccurredTime);
+    if (!timeAdministered) {
+      Alert.alert('Time Required', 'Enter the medicine time in 24-hour format, for example 14:30.');
+      return;
+    }
+
+    if (new Date(timeAdministered).getTime() > Date.now()) {
+      Alert.alert('Date Not Allowed', 'The medicine time cannot be in the future.');
+      return;
+    }
+
     try {
       setMedicineSaving(true);
       const savedEntry = await saveMedicineLogRecord({
@@ -2486,6 +2692,7 @@ function StudentClassFolderScreen({ route, navigation }) {
         medicationName: medicineName.trim(),
         dosage: medicineDosage.trim(),
         staffMember: medicineStaffMember.trim(),
+        timeAdministered,
       }, medicineStudent);
 
       closeMedicineModal();
@@ -2511,6 +2718,18 @@ function StudentClassFolderScreen({ route, navigation }) {
       return;
     }
 
+    const generalOccurredDate = `${generalOccurredYear}-${generalOccurredMonth}-${generalOccurredDay}`;
+    const occurredAt = buildIncidentOccurredAt(generalOccurredDate, generalOccurredTime);
+    if (!occurredAt) {
+      Alert.alert('Time Required', 'Enter the communication time in 24-hour format, for example 14:30.');
+      return;
+    }
+
+    if (new Date(occurredAt).getTime() > Date.now()) {
+      Alert.alert('Date Not Allowed', 'The communication time cannot be in the future.');
+      return;
+    }
+
     try {
       setGeneralSaving(true);
       await saveGeneralLogRecord({
@@ -2518,6 +2737,7 @@ function StudentClassFolderScreen({ route, navigation }) {
         subject: generalSubject.trim(),
         note: generalNote.trim(),
         staffMember: generalStaffMember.trim(),
+        occurredAt,
       }, generalStudent);
 
       closeGeneralModal();
@@ -2645,6 +2865,19 @@ function StudentClassFolderScreen({ route, navigation }) {
                   value={incidentLocation}
                   onChangeText={setIncidentLocation}
                 />
+                <View style={styles.compactDateFieldWrapper}>
+                  <Text style={styles.compactDateLabel}>When It Happened</Text>
+                  <TouchableOpacity style={styles.compactDateField} onPress={() => setShowIncidentOccurredDatePicker(true)}>
+                    <Text style={styles.compactDateFieldText}>{formatCompactDateDisplay(incidentOccurredYear, incidentOccurredMonth, incidentOccurredDay)}</Text>
+                  </TouchableOpacity>
+                </View>
+                <TextInput
+                  style={styles.formInput}
+                  placeholder="Time happened (HH:MM)"
+                  placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+                  value={incidentOccurredTime}
+                  onChangeText={setIncidentOccurredTime}
+                />
                 <TextInput
                   style={[styles.formInput, styles.reasonInput]}
                   placeholder="Description"
@@ -2680,6 +2913,19 @@ function StudentClassFolderScreen({ route, navigation }) {
                     <Text style={styles.modalButtonPrimaryText}>{incidentSaving ? 'Saving...' : 'Save'}</Text>
                   </TouchableOpacity>
                 </View>
+
+                <CompactDatePickerModal
+                  visible={showIncidentOccurredDatePicker}
+                  onClose={() => setShowIncidentOccurredDatePicker(false)}
+                  onDateSelect={(y, m, d) => {
+                    setIncidentOccurredYear(y);
+                    setIncidentOccurredMonth(m);
+                    setIncidentOccurredDay(d);
+                  }}
+                  currentYear={incidentOccurredYear}
+                  currentMonth={incidentOccurredMonth}
+                  currentDay={incidentOccurredDay}
+                />
               </View>
             </TouchableWithoutFeedback>
           </View>
@@ -2712,6 +2958,19 @@ function StudentClassFolderScreen({ route, navigation }) {
                   value={medicineName}
                   onChangeText={setMedicineName}
                 />
+                <View style={styles.compactDateFieldWrapper}>
+                  <Text style={styles.compactDateLabel}>When It Was Given</Text>
+                  <TouchableOpacity style={styles.compactDateField} onPress={() => setShowMedicineOccurredDatePicker(true)}>
+                    <Text style={styles.compactDateFieldText}>{formatCompactDateDisplay(medicineOccurredYear, medicineOccurredMonth, medicineOccurredDay)}</Text>
+                  </TouchableOpacity>
+                </View>
+                <TextInput
+                  style={styles.formInput}
+                  placeholder="Time given (HH:MM)"
+                  placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+                  value={medicineOccurredTime}
+                  onChangeText={setMedicineOccurredTime}
+                />
                 <TextInput
                   style={styles.formInput}
                   placeholder="Dosage"
@@ -2739,6 +2998,19 @@ function StudentClassFolderScreen({ route, navigation }) {
                     <Text style={styles.modalButtonPrimaryText}>{medicineSaving ? 'Saving...' : 'Save'}</Text>
                   </TouchableOpacity>
                 </View>
+
+                <CompactDatePickerModal
+                  visible={showMedicineOccurredDatePicker}
+                  onClose={() => setShowMedicineOccurredDatePicker(false)}
+                  onDateSelect={(y, m, d) => {
+                    setMedicineOccurredYear(y);
+                    setMedicineOccurredMonth(m);
+                    setMedicineOccurredDay(d);
+                  }}
+                  currentYear={medicineOccurredYear}
+                  currentMonth={medicineOccurredMonth}
+                  currentDay={medicineOccurredDay}
+                />
               </View>
             </TouchableWithoutFeedback>
           </View>
@@ -2764,6 +3036,19 @@ function StudentClassFolderScreen({ route, navigation }) {
                   placeholderTextColor={FORM_PLACEHOLDER_COLOR}
                   value={generalSubject}
                   onChangeText={setGeneralSubject}
+                />
+                <View style={styles.compactDateFieldWrapper}>
+                  <Text style={styles.compactDateLabel}>When It Happened</Text>
+                  <TouchableOpacity style={styles.compactDateField} onPress={() => setShowGeneralOccurredDatePicker(true)}>
+                    <Text style={styles.compactDateFieldText}>{formatCompactDateDisplay(generalOccurredYear, generalOccurredMonth, generalOccurredDay)}</Text>
+                  </TouchableOpacity>
+                </View>
+                <TextInput
+                  style={styles.formInput}
+                  placeholder="Time happened (HH:MM)"
+                  placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+                  value={generalOccurredTime}
+                  onChangeText={setGeneralOccurredTime}
                 />
                 <TextInput
                   style={[styles.formInput, styles.reasonInput]}
@@ -2793,6 +3078,19 @@ function StudentClassFolderScreen({ route, navigation }) {
                     <Text style={styles.modalButtonPrimaryText}>{generalSaving ? 'Saving...' : 'Save'}</Text>
                   </TouchableOpacity>
                 </View>
+
+                <CompactDatePickerModal
+                  visible={showGeneralOccurredDatePicker}
+                  onClose={() => setShowGeneralOccurredDatePicker(false)}
+                  onDateSelect={(y, m, d) => {
+                    setGeneralOccurredYear(y);
+                    setGeneralOccurredMonth(m);
+                    setGeneralOccurredDay(d);
+                  }}
+                  currentYear={generalOccurredYear}
+                  currentMonth={generalOccurredMonth}
+                  currentDay={generalOccurredDay}
+                />
               </View>
             </TouchableWithoutFeedback>
           </View>
@@ -2821,6 +3119,7 @@ function EmergencyProfileScreen({ route, navigation }) {
   const [incidentHistory, setIncidentHistory] = useState([]);
   const [medicineHistory, setMedicineHistory] = useState([]);
   const [generalHistory, setGeneralHistory] = useState([]);
+  const [activeHistoryModal, setActiveHistoryModal] = useState('');
   const emergencyContacts = Array.isArray(student.emergencyContacts) ? student.emergencyContacts : [];
   const allergies = String(student.allergies || '').trim().toLowerCase();
   const hasCriticalAllergy = allergies && allergies !== 'none' && allergies !== 'no known allergies';
@@ -2829,7 +3128,7 @@ function EmergencyProfileScreen({ route, navigation }) {
   const currentYear = parseInt(TODAY.split('-')[0], 10);
   const currentMonth = parseInt(TODAY.split('-')[1], 10);
   const currentDay = parseInt(TODAY.split('-')[2], 10);
-  const parentAbsentYear = String(currentYear);
+  const [parentAbsentYear, setParentAbsentYear] = useState(String(currentYear));
   const [parentAbsentMonth, setParentAbsentMonth] = useState(String(currentMonth).padStart(2, '0'));
   const [parentAbsentDay, setParentAbsentDay] = useState(String(currentDay).padStart(2, '0'));
   const parentAbsentDate = `${parentAbsentYear}-${parentAbsentMonth}-${parentAbsentDay}`;
@@ -2844,11 +3143,8 @@ function EmergencyProfileScreen({ route, navigation }) {
       return;
     }
 
-    const refreshedAttendance = await fetchAllAttendanceFromFirestore();
     const normalizedStudentId = String(student.id || '').trim();
-    const scopedAttendance = isParentAccount
-      ? filterRecordsByAccess(refreshedAttendance, accessProfile)
-      : refreshedAttendance;
+    const scopedAttendance = await loadAttendanceHistoryForStudentFromDataStore(normalizedStudentId);
 
     setAttendanceHistory(
       scopedAttendance.filter((entry) => {
@@ -2876,7 +3172,8 @@ function EmergencyProfileScreen({ route, navigation }) {
 
     const incidentRows = incidentHistory.map((entry) => `
       <tr>
-        <td>${escapeHtml(formatDateTime(entry.timestamp))}</td>
+        <td>${escapeHtml(formatDateTime(entry.occurredAt || entry.timestamp))}</td>
+        <td>${escapeHtml(formatDateTime(entry.createdAt || entry.timestamp))}</td>
         <td>${escapeHtml(entry.location || 'Incident')}</td>
         <td>${escapeHtml(entry.description || '')}</td>
         <td>${escapeHtml(entry.actionTaken || 'Not recorded')}</td>
@@ -2886,6 +3183,7 @@ function EmergencyProfileScreen({ route, navigation }) {
     const medicineRows = medicineHistory.map((entry) => `
       <tr>
         <td>${escapeHtml(formatDateTime(entry.timeAdministered))}</td>
+        <td>${escapeHtml(formatDateTime(entry.createdAt || entry.timeAdministered))}</td>
         <td>${escapeHtml(entry.medicationName || 'Medication')}</td>
         <td>${escapeHtml(entry.dosage || 'Not recorded')}</td>
         <td>${escapeHtml(entry.staffMember || 'Not recorded')}</td>
@@ -2894,7 +3192,8 @@ function EmergencyProfileScreen({ route, navigation }) {
 
     const generalRows = generalHistory.map((entry) => `
       <tr>
-        <td>${escapeHtml(formatDateTime(entry.timestamp))}</td>
+        <td>${escapeHtml(formatDateTime(entry.occurredAt || entry.timestamp))}</td>
+        <td>${escapeHtml(formatDateTime(entry.createdAt || entry.timestamp))}</td>
         <td>${escapeHtml(entry.subject || 'General communication')}</td>
         <td>${escapeHtml(entry.note || 'Not recorded')}</td>
         <td>${escapeHtml(entry.staffMember || 'Not recorded')}</td>
@@ -2925,13 +3224,13 @@ function EmergencyProfileScreen({ route, navigation }) {
           ${attendanceRows ? `<table><thead><tr><th>Date</th><th>Status</th><th>Reason</th></tr></thead><tbody>${attendanceRows}</tbody></table>` : '<p>No records found.</p>'}
 
           <h2>Incident History</h2>
-          ${incidentRows ? `<table><thead><tr><th>Date/Time</th><th>Location</th><th>Description</th><th>Action Taken</th></tr></thead><tbody>${incidentRows}</tbody></table>` : '<p>No records found.</p>'}
+          ${incidentRows ? `<table><thead><tr><th>Happened</th><th>Logged</th><th>Location</th><th>Description</th><th>Action Taken</th></tr></thead><tbody>${incidentRows}</tbody></table>` : '<p>No records found.</p>'}
 
           <h2>Medicine Log History</h2>
-          ${medicineRows ? `<table><thead><tr><th>Date/Time</th><th>Medication</th><th>Dosage</th><th>Staff Member</th></tr></thead><tbody>${medicineRows}</tbody></table>` : '<p>No records found.</p>'}
+          ${medicineRows ? `<table><thead><tr><th>Given</th><th>Logged</th><th>Medication</th><th>Dosage</th><th>Staff Member</th></tr></thead><tbody>${medicineRows}</tbody></table>` : '<p>No records found.</p>'}
 
           <h2>General Communication History</h2>
-          ${generalRows ? `<table><thead><tr><th>Date/Time</th><th>Subject</th><th>Note</th><th>Staff Member</th></tr></thead><tbody>${generalRows}</tbody></table>` : '<p>No records found.</p>'}
+          ${generalRows ? `<table><thead><tr><th>Happened</th><th>Logged</th><th>Subject</th><th>Note</th><th>Staff Member</th></tr></thead><tbody>${generalRows}</tbody></table>` : '<p>No records found.</p>'}
         </body>
       </html>
     `;
@@ -3003,8 +3302,8 @@ function EmergencyProfileScreen({ route, navigation }) {
       return;
     }
 
-    if (parentAbsentDate < TODAY) {
-      Alert.alert('Date Not Allowed', 'Please choose today or a future date for absence notices.');
+    if (parentAbsentDate !== getCurrentLocalDateString()) {
+      Alert.alert('Date Not Allowed', 'Attendance locks at midnight. Parents can only submit absence notices for today.');
       return;
     }
 
@@ -3078,6 +3377,11 @@ function EmergencyProfileScreen({ route, navigation }) {
 
   const handleParentUndoAbsentForDate = () => {
     if (!isParentAccount || !canOpenThisStudent || !student?.id || !hasParentMarkedAbsentForDate) {
+      return;
+    }
+
+    if (parentAbsentDate !== getCurrentLocalDateString()) {
+      Alert.alert('Date Locked', 'Attendance locks at midnight. This absence notice can no longer be changed.');
       return;
     }
 
@@ -3160,10 +3464,10 @@ function EmergencyProfileScreen({ route, navigation }) {
       try {
         setHistoryLoading(true);
         const [attendanceData, incidentData, medicineData, generalData] = await Promise.all([
-          fetchAllAttendanceFromFirestore(),
-          loadIncidentsFromDataStore(),
-          loadMedicineLogsFromDataStore(),
-          loadGeneralLogsFromDataStore(),
+          loadAttendanceHistoryForStudentFromDataStore(student.id),
+          loadIncidentsForStudentFromDataStore(student.id),
+          loadMedicineLogsForStudentFromDataStore(student.id),
+          loadGeneralLogsForStudentFromDataStore(student.id),
         ]);
 
         if (!isActive) {
@@ -3254,7 +3558,7 @@ function EmergencyProfileScreen({ route, navigation }) {
         {isParentAccount ? (
           <View style={styles.card}>
             <Text style={styles.sectionTitle}>Attendance Notice</Text>
-            <Text style={styles.infoText}>Choose a date and submit an absence notice so staff can see it in the attendance register.</Text>
+            <Text style={styles.infoText}>Attendance notices are only open for today and lock automatically at 12:00 AM.</Text>
             <View style={styles.compactDateFieldWrapper}>
               <Text style={styles.compactDateLabel}>Absent Date</Text>
               <TouchableOpacity
@@ -3265,25 +3569,30 @@ function EmergencyProfileScreen({ route, navigation }) {
               </TouchableOpacity>
             </View>
             <TouchableOpacity
-              style={[styles.editStudentButton, hasParentMarkedAbsentForDate && styles.moduleCardDisabled]}
+              style={[styles.editStudentButton, (hasParentMarkedAbsentForDate || parentAbsentDate !== getCurrentLocalDateString()) && styles.moduleCardDisabled]}
               onPress={handleParentReportAbsentForDate}
-              disabled={parentAbsentSaving || hasParentMarkedAbsentForDate}
+              disabled={parentAbsentSaving || hasParentMarkedAbsentForDate || parentAbsentDate !== getCurrentLocalDateString()}
             >
               <Text style={styles.editStudentButtonText}>
                 {parentAbsentSaving
                   ? 'Saving absence...'
                   : hasParentMarkedAbsentForDate
                     ? 'Absent for selected date submitted'
-                    : 'Child Will Be Absent'}
+                    : parentAbsentDate !== getCurrentLocalDateString()
+                      ? 'Only today can be submitted'
+                      : 'Child Will Be Absent'}
               </Text>
             </TouchableOpacity>
+            {parentAbsentDate !== getCurrentLocalDateString() ? (
+              <Text style={styles.tapHint}>Past and future attendance dates are locked for parent updates.</Text>
+            ) : null}
             {hasParentMarkedAbsentForDate ? (
               <>
                 <Text style={styles.tapHint}>Staff can now see this for {parentAbsentDate} under attendance.</Text>
                 <TouchableOpacity
                   style={styles.undoAbsentButton}
                   onPress={handleParentUndoAbsentForDate}
-                  disabled={parentAbsentSaving}
+                  disabled={parentAbsentSaving || parentAbsentDate !== getCurrentLocalDateString()}
                 >
                   <Text style={styles.undoAbsentButtonText}>{parentAbsentSaving ? 'Updating...' : 'Undo Absent for Selected Date'}</Text>
                 </TouchableOpacity>
@@ -3292,11 +3601,12 @@ function EmergencyProfileScreen({ route, navigation }) {
             <CompactDatePickerModal
               visible={showParentAbsentDatePicker}
               onClose={() => setShowParentAbsentDatePicker(false)}
-              onDateSelect={(_, m, d) => {
+              onDateSelect={(y, m, d) => {
+                setParentAbsentYear(y);
                 setParentAbsentMonth(m);
                 setParentAbsentDay(d);
               }}
-              currentYear={currentYear}
+              currentYear={parentAbsentYear}
               currentMonth={parentAbsentMonth}
               currentDay={parentAbsentDay}
             />
@@ -3334,49 +3644,20 @@ function EmergencyProfileScreen({ route, navigation }) {
           </TouchableOpacity>
         </View>
 
-        <Text style={styles.sectionTitle}>Attendance History</Text>
-        {historyLoading ? <Text style={styles.statusText}>Loading attendance history...</Text> : null}
-        {!historyLoading && attendanceHistory.length === 0 ? <Text style={styles.statusText}>No late or absent records yet.</Text> : null}
-        {attendanceHistory.slice(0, 12).map((entry) => (
-          <View key={entry.id} style={styles.timelineCard}>
-            <Text style={styles.studentName}>{entry.status}</Text>
-            <Text style={styles.timelineMeta}>{entry.date || formatDateTime(entry.createdAt)} • {entry.className || getClassroomName(student)}</Text>
-            {entry.reason ? <Text style={styles.timelineText}>Reason: {entry.reason}</Text> : null}
-          </View>
-        ))}
-
-        <Text style={styles.sectionTitle}>Incident History</Text>
-        {!historyLoading && incidentHistory.length === 0 ? <Text style={styles.statusText}>No incident records yet.</Text> : null}
-        {incidentHistory.slice(0, 12).map((entry) => (
-          <View key={entry.id} style={styles.timelineCard}>
-            <Text style={styles.studentName}>{entry.location || 'Incident'}</Text>
-            <Text style={styles.timelineMeta}>{formatDateTime(entry.timestamp)}</Text>
-            <Text style={styles.timelineText}>{entry.description}</Text>
-            <Text style={styles.tapHint}>Action taken: {entry.actionTaken || 'Not recorded'}</Text>
-          </View>
-        ))}
-
-        <Text style={styles.sectionTitle}>Medicine Log History</Text>
-        {!historyLoading && medicineHistory.length === 0 ? <Text style={styles.statusText}>No medicine entries yet.</Text> : null}
-        {medicineHistory.slice(0, 12).map((entry) => (
-          <View key={entry.id} style={styles.timelineCard}>
-            <Text style={styles.studentName}>{entry.medicationName || 'Medication'}</Text>
-            <Text style={styles.timelineMeta}>{formatDateTime(entry.timeAdministered)}</Text>
-            <Text style={styles.timelineText}>Dosage: {entry.dosage || 'Not recorded'}</Text>
-            <Text style={styles.tapHint}>Staff member: {entry.staffMember || 'Not recorded'}</Text>
-          </View>
-        ))}
-
-        <Text style={styles.sectionTitle}>General Communication History</Text>
-        {!historyLoading && generalHistory.length === 0 ? <Text style={styles.statusText}>No general communication entries yet.</Text> : null}
-        {generalHistory.slice(0, 12).map((entry) => (
-          <View key={entry.id} style={styles.timelineCard}>
-            <Text style={styles.studentName}>{entry.subject || 'General communication'}</Text>
-            <Text style={styles.timelineMeta}>{formatDateTime(entry.timestamp)}</Text>
-            <Text style={styles.timelineText}>{entry.note || 'Not recorded'}</Text>
-            <Text style={styles.tapHint}>Staff member: {entry.staffMember || 'Not recorded'}</Text>
-          </View>
-        ))}
+        <View style={styles.card}>
+          <Text style={styles.sectionTitle}>Learner History</Text>
+          <Text style={styles.infoText}>Open a category to view that learner's detailed history without scrolling through every record on this page.</Text>
+          {[
+            { key: 'attendance', label: `Attendance (${attendanceHistory.length})` },
+            { key: 'incidents', label: `Incident (${incidentHistory.length})` },
+            { key: 'medicine', label: `Medicine (${medicineHistory.length})` },
+            { key: 'general', label: `General Communication (${generalHistory.length})` },
+          ].map((item) => (
+            <TouchableOpacity key={item.key} style={styles.reportButton} onPress={() => setActiveHistoryModal(item.key)}>
+              <Text style={styles.saveStudentButtonText}>{item.label}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
 
         <TouchableOpacity
           style={[styles.reportButton, !canExportReports && styles.saveStudentButtonDisabled]}
@@ -3387,6 +3668,76 @@ function EmergencyProfileScreen({ route, navigation }) {
             {canExportReports ? 'Export Learner History' : 'Export not available for your role'}
           </Text>
         </TouchableOpacity>
+
+        <LearnerHistoryModal
+          visible={activeHistoryModal === 'attendance'}
+          title="Attendance History"
+          emptyText="No late or absent records yet."
+          loading={historyLoading}
+          onClose={() => setActiveHistoryModal('')}
+        >
+          {!historyLoading && attendanceHistory.length > 0 ? attendanceHistory.map((entry) => (
+            <View key={entry.id} style={styles.timelineCard}>
+              <Text style={styles.studentName}>{entry.status}</Text>
+              <Text style={styles.timelineMeta}>{entry.date || formatDateTime(entry.createdAt)} • {entry.className || getClassroomName(student)}</Text>
+              {entry.reason ? <Text style={styles.timelineText}>Reason: {entry.reason}</Text> : null}
+            </View>
+          )) : null}
+        </LearnerHistoryModal>
+
+        <LearnerHistoryModal
+          visible={activeHistoryModal === 'incidents'}
+          title="Incident History"
+          emptyText="No incident records yet."
+          loading={historyLoading}
+          onClose={() => setActiveHistoryModal('')}
+        >
+          {!historyLoading && incidentHistory.length > 0 ? incidentHistory.map((entry) => (
+            <View key={entry.id} style={styles.timelineCard}>
+              <Text style={styles.studentName}>{entry.location || 'Incident'}</Text>
+              <Text style={styles.timelineMeta}>Happened: {formatDateTime(entry.occurredAt || entry.timestamp)}</Text>
+              <Text style={styles.tapHint}>Logged: {formatDateTime(entry.createdAt || entry.timestamp)}</Text>
+              <Text style={styles.timelineText}>{entry.description}</Text>
+              <Text style={styles.tapHint}>Action taken: {entry.actionTaken || 'Not recorded'}</Text>
+            </View>
+          )) : null}
+        </LearnerHistoryModal>
+
+        <LearnerHistoryModal
+          visible={activeHistoryModal === 'medicine'}
+          title="Medicine History"
+          emptyText="No medicine entries yet."
+          loading={historyLoading}
+          onClose={() => setActiveHistoryModal('')}
+        >
+          {!historyLoading && medicineHistory.length > 0 ? medicineHistory.map((entry) => (
+            <View key={entry.id} style={styles.timelineCard}>
+              <Text style={styles.studentName}>{entry.medicationName || 'Medication'}</Text>
+              <Text style={styles.timelineMeta}>Given: {formatDateTime(entry.timeAdministered)}</Text>
+              <Text style={styles.tapHint}>Logged: {formatDateTime(entry.createdAt || entry.timeAdministered)}</Text>
+              <Text style={styles.timelineText}>Dosage: {entry.dosage || 'Not recorded'}</Text>
+              <Text style={styles.tapHint}>Staff member: {entry.staffMember || 'Not recorded'}</Text>
+            </View>
+          )) : null}
+        </LearnerHistoryModal>
+
+        <LearnerHistoryModal
+          visible={activeHistoryModal === 'general'}
+          title="General Communication History"
+          emptyText="No general communication entries yet."
+          loading={historyLoading}
+          onClose={() => setActiveHistoryModal('')}
+        >
+          {!historyLoading && generalHistory.length > 0 ? generalHistory.map((entry) => (
+            <View key={entry.id} style={styles.timelineCard}>
+              <Text style={styles.studentName}>{entry.subject || 'General communication'}</Text>
+              <Text style={styles.timelineMeta}>Happened: {formatDateTime(entry.occurredAt || entry.timestamp)}</Text>
+              <Text style={styles.tapHint}>Logged: {formatDateTime(entry.createdAt || entry.timestamp)}</Text>
+              <Text style={styles.timelineText}>{entry.note || 'Not recorded'}</Text>
+              <Text style={styles.tapHint}>Staff member: {entry.staffMember || 'Not recorded'}</Text>
+            </View>
+          )) : null}
+        </LearnerHistoryModal>
 
         <Modal
           visible={isPinModalVisible}
@@ -3536,6 +3887,7 @@ function AttendanceClassFolderScreen({ route, navigation }) {
   const canTakeAttendance = hasPermission(accessProfile, 'canTakeAttendance');
   const className = route.params?.className || 'Attendance Folder';
   const registerDate = route.params?.date || TODAY;
+  const isAttendanceLocked = !isAttendanceDateEditable(registerDate);
   const [entries, setEntries] = useState([]);
   const [notes, setNotes] = useState({});
   const [searchQuery, setSearchQuery] = useState('');
@@ -3640,6 +3992,11 @@ function AttendanceClassFolderScreen({ route, navigation }) {
             <Text style={styles.infoText}>This account can view attendance but cannot change it.</Text>
           </View>
         ) : null}
+        {canTakeAttendance && isAttendanceLocked ? (
+          <View style={styles.infoBox}>
+            <Text style={styles.infoText}>Attendance for {registerDate} is locked. Changes are only allowed until 12:00 AM on that date.</Text>
+          </View>
+        ) : null}
         {!loading && !errorMessage && visibleEntries.length === 0 ? (
           <Text style={styles.statusText}>No learners found in this class.</Text>
         ) : null}
@@ -3667,6 +4024,7 @@ function AttendanceClassFolderScreen({ route, navigation }) {
               placeholder="Reason for late arrival or absence"
               placeholderTextColor={FORM_PLACEHOLDER_COLOR}
               value={notes[entry.studentId] ?? ''}
+              editable={!isAttendanceLocked && canTakeAttendance}
               onChangeText={(text) => setNotes((currentNotes) => ({
                 ...currentNotes,
                 [entry.studentId]: text,
@@ -3686,7 +4044,7 @@ function AttendanceClassFolderScreen({ route, navigation }) {
                     entry.status === value && styles.statusActionButtonSelected,
                   ]}
                   onPress={() => handleStatusUpdate(entry, value)}
-                  disabled={savingStudentId === entry.studentId || !canTakeAttendance}
+                  disabled={savingStudentId === entry.studentId || !canTakeAttendance || isAttendanceLocked}
                 >
                   <Text style={[styles.statusActionButtonText, entry.status === value && styles.selectedActionText]}>{label}</Text>
                 </TouchableOpacity>
@@ -3704,12 +4062,18 @@ function AttendanceClassFolderScreen({ route, navigation }) {
 function IncidentRegisterScreen({ navigation }) {
   const accessProfile = useAccessProfile();
   const canLogIncidents = hasPermission(accessProfile, 'canLogIncidents');
+  const initialIncidentDate = getCurrentLocalDateString();
   const [students, setStudents] = useState([]);
   const [selectedStudentId, setSelectedStudentId] = useState('');
   const [location, setLocation] = useState('Playground');
   const [description, setDescription] = useState('');
   const [actionTaken, setActionTaken] = useState('');
   const [witness, setWitness] = useState('');
+  const [occurredYear, setOccurredYear] = useState(initialIncidentDate.split('-')[0]);
+  const [occurredMonth, setOccurredMonth] = useState(initialIncidentDate.split('-')[1]);
+  const [occurredDay, setOccurredDay] = useState(initialIncidentDate.split('-')[2]);
+  const [occurredTime, setOccurredTime] = useState(getCurrentLocalTimeString());
+  const [showOccurredDatePicker, setShowOccurredDatePicker] = useState(false);
   const [incidents, setIncidents] = useState([]);
   const [isSaving, setIsSaving] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -3767,6 +4131,18 @@ function IncidentRegisterScreen({ navigation }) {
       return;
     }
 
+    const incidentOccurredDate = `${occurredYear}-${occurredMonth}-${occurredDay}`;
+    const occurredAt = buildIncidentOccurredAt(incidentOccurredDate, occurredTime);
+    if (!occurredAt) {
+      Alert.alert('Time Required', 'Enter the incident time in 24-hour format, for example 14:30.');
+      return;
+    }
+
+    if (new Date(occurredAt).getTime() > Date.now()) {
+      Alert.alert('Date Not Allowed', 'The incident happened time cannot be in the future.');
+      return;
+    }
+
     try {
       setIsSaving(true);
       const savedIncident = await saveIncidentRecord({
@@ -3775,12 +4151,17 @@ function IncidentRegisterScreen({ navigation }) {
         description: description.trim(),
         actionTaken: actionTaken.trim(),
         witness: witness.trim(),
+        occurredAt,
       }, selectedStudent);
 
       setIncidents((currentIncidents) => [savedIncident, ...currentIncidents]);
       setDescription('');
       setActionTaken('');
       setWitness('');
+      setOccurredYear(getCurrentLocalDateString().split('-')[0]);
+      setOccurredMonth(getCurrentLocalDateString().split('-')[1]);
+      setOccurredDay(getCurrentLocalDateString().split('-')[2]);
+      setOccurredTime(getCurrentLocalTimeString());
       Alert.alert('Saved', 'Incident recorded and saved to Firestore.');
     } catch (error) {
       Alert.alert('Error', error.message || 'Could not save the incident.');
@@ -3810,6 +4191,19 @@ function IncidentRegisterScreen({ navigation }) {
           placeholderTextColor={FORM_PLACEHOLDER_COLOR}
           value={location}
           onChangeText={setLocation}
+        />
+        <View style={styles.compactDateFieldWrapper}>
+          <Text style={styles.compactDateLabel}>When It Happened</Text>
+          <TouchableOpacity style={styles.compactDateField} onPress={() => setShowOccurredDatePicker(true)}>
+            <Text style={styles.compactDateFieldText}>{formatCompactDateDisplay(occurredYear, occurredMonth, occurredDay)}</Text>
+          </TouchableOpacity>
+        </View>
+        <TextInput
+          style={styles.formInput}
+          placeholder="Time happened (HH:MM)"
+          placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+          value={occurredTime}
+          onChangeText={setOccurredTime}
         />
         <TextInput
           style={[styles.formInput, styles.reasonInput]}
@@ -3847,11 +4241,25 @@ function IncidentRegisterScreen({ navigation }) {
         {loading ? <Text style={styles.statusText}>Loading incident records...</Text> : null}
         {errorMessage ? <Text style={styles.errorText}>{errorMessage}</Text> : null}
 
+        <CompactDatePickerModal
+          visible={showOccurredDatePicker}
+          onClose={() => setShowOccurredDatePicker(false)}
+          onDateSelect={(y, m, d) => {
+            setOccurredYear(y);
+            setOccurredMonth(m);
+            setOccurredDay(d);
+          }}
+          currentYear={occurredYear}
+          currentMonth={occurredMonth}
+          currentDay={occurredDay}
+        />
+
         <Text style={styles.sectionTitle}>Recent Incidents</Text>
         {incidents.map((incident) => (
           <View key={incident.id} style={styles.timelineCard}>
             <Text style={styles.studentName}>{incident.studentName || 'General incident'}</Text>
-            <Text style={styles.timelineMeta}>{formatDateTime(incident.timestamp)} • {incident.location}</Text>
+            <Text style={styles.timelineMeta}>Happened: {formatDateTime(incident.occurredAt || incident.timestamp)} • {incident.location}</Text>
+            <Text style={styles.tapHint}>Logged: {formatDateTime(incident.createdAt || incident.timestamp)}</Text>
             <Text style={styles.timelineText}>{incident.description}</Text>
             <Text style={styles.tapHint}>Action Taken: {incident.actionTaken}</Text>
             <Text style={styles.tapHint}>Witness: {incident.witness}</Text>
@@ -3866,11 +4274,17 @@ function IncidentRegisterScreen({ navigation }) {
 function MedicineAdministrationScreen({ navigation }) {
   const accessProfile = useAccessProfile();
   const canLogMedicine = hasPermission(accessProfile, 'canLogMedicine');
+  const initialMedicineDate = getCurrentLocalDateString();
   const [students, setStudents] = useState([]);
   const [selectedStudentId, setSelectedStudentId] = useState('');
   const [medicationName, setMedicationName] = useState('');
   const [dosage, setDosage] = useState('');
   const [staffMember, setStaffMember] = useState('');
+  const [administeredYear, setAdministeredYear] = useState(initialMedicineDate.split('-')[0]);
+  const [administeredMonth, setAdministeredMonth] = useState(initialMedicineDate.split('-')[1]);
+  const [administeredDay, setAdministeredDay] = useState(initialMedicineDate.split('-')[2]);
+  const [administeredTime, setAdministeredTime] = useState(getCurrentLocalTimeString());
+  const [showAdministeredDatePicker, setShowAdministeredDatePicker] = useState(false);
   const [medicineLogs, setMedicineLogs] = useState([]);
   const [isSaving, setIsSaving] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -3933,6 +4347,18 @@ function MedicineAdministrationScreen({ navigation }) {
       return;
     }
 
+    const medicineOccurredDate = `${administeredYear}-${administeredMonth}-${administeredDay}`;
+    const timeAdministered = buildIncidentOccurredAt(medicineOccurredDate, administeredTime);
+    if (!timeAdministered) {
+      Alert.alert('Time Required', 'Enter the medicine time in 24-hour format, for example 14:30.');
+      return;
+    }
+
+    if (new Date(timeAdministered).getTime() > Date.now()) {
+      Alert.alert('Date Not Allowed', 'The medicine time cannot be in the future.');
+      return;
+    }
+
     try {
       setIsSaving(true);
       const savedEntry = await saveMedicineLogRecord({
@@ -3940,12 +4366,17 @@ function MedicineAdministrationScreen({ navigation }) {
         medicationName: medicationName.trim(),
         dosage: dosage.trim(),
         staffMember: staffMember.trim(),
+        timeAdministered,
       }, selectedStudent);
 
       setMedicineLogs((currentLogs) => [savedEntry, ...currentLogs]);
       setMedicationName('');
       setDosage('');
       setStaffMember('');
+      setAdministeredYear(getCurrentLocalDateString().split('-')[0]);
+      setAdministeredMonth(getCurrentLocalDateString().split('-')[1]);
+      setAdministeredDay(getCurrentLocalDateString().split('-')[2]);
+      setAdministeredTime(getCurrentLocalTimeString());
 
       if (savedEntry?.allergyWarning) {
         Alert.alert('WARNING', 'This medication matches a recorded allergy. Please double-check before administration.');
@@ -3989,6 +4420,19 @@ function MedicineAdministrationScreen({ navigation }) {
           value={medicationName}
           onChangeText={setMedicationName}
         />
+        <View style={styles.compactDateFieldWrapper}>
+          <Text style={styles.compactDateLabel}>When It Was Given</Text>
+          <TouchableOpacity style={styles.compactDateField} onPress={() => setShowAdministeredDatePicker(true)}>
+            <Text style={styles.compactDateFieldText}>{formatCompactDateDisplay(administeredYear, administeredMonth, administeredDay)}</Text>
+          </TouchableOpacity>
+        </View>
+        <TextInput
+          style={styles.formInput}
+          placeholder="Time given (HH:MM)"
+          placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+          value={administeredTime}
+          onChangeText={setAdministeredTime}
+        />
         <TextInput
           style={styles.formInput}
           placeholder="Dosage (e.g. 5ml)"
@@ -4017,11 +4461,25 @@ function MedicineAdministrationScreen({ navigation }) {
         {loading ? <Text style={styles.statusText}>Loading medicine records...</Text> : null}
         {errorMessage ? <Text style={styles.errorText}>{errorMessage}</Text> : null}
 
+        <CompactDatePickerModal
+          visible={showAdministeredDatePicker}
+          onClose={() => setShowAdministeredDatePicker(false)}
+          onDateSelect={(y, m, d) => {
+            setAdministeredYear(y);
+            setAdministeredMonth(m);
+            setAdministeredDay(d);
+          }}
+          currentYear={administeredYear}
+          currentMonth={administeredMonth}
+          currentDay={administeredDay}
+        />
+
         <Text style={styles.sectionTitle}>Recent Medicine Logs</Text>
         {medicineLogs.map((entry) => (
           <View key={entry.id} style={styles.timelineCard}>
             <Text style={styles.studentName}>{entry.studentName || entry.studentId}</Text>
-            <Text style={styles.timelineMeta}>{formatDateTime(entry.timeAdministered)}</Text>
+            <Text style={styles.timelineMeta}>Given: {formatDateTime(entry.timeAdministered)}</Text>
+            <Text style={styles.tapHint}>Logged: {formatDateTime(entry.createdAt || entry.timeAdministered)}</Text>
             <Text style={styles.timelineText}>{entry.medicationName} - {entry.dosage}</Text>
             <Text style={styles.tapHint}>Given by: {entry.staffMember}</Text>
             {entry.allergyWarning ? <Text style={styles.warningText}>WARNING flagged against allergy record</Text> : null}
@@ -4035,11 +4493,17 @@ function MedicineAdministrationScreen({ navigation }) {
 function GeneralCommunicationScreen({ navigation }) {
   const accessProfile = useAccessProfile();
   const canLogGeneral = hasPermission(accessProfile, 'canLogGeneral');
+  const initialGeneralDate = getCurrentLocalDateString();
   const [students, setStudents] = useState([]);
   const [selectedStudentId, setSelectedStudentId] = useState('');
   const [subject, setSubject] = useState('');
   const [note, setNote] = useState('');
   const [staffMember, setStaffMember] = useState('');
+  const [generalOccurredYear, setGeneralOccurredYear] = useState(initialGeneralDate.split('-')[0]);
+  const [generalOccurredMonth, setGeneralOccurredMonth] = useState(initialGeneralDate.split('-')[1]);
+  const [generalOccurredDay, setGeneralOccurredDay] = useState(initialGeneralDate.split('-')[2]);
+  const [generalOccurredTime, setGeneralOccurredTime] = useState(getCurrentLocalTimeString());
+  const [showGeneralOccurredDatePicker, setShowGeneralOccurredDatePicker] = useState(false);
   const [generalLogs, setGeneralLogs] = useState([]);
   const [isSaving, setIsSaving] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -4097,6 +4561,18 @@ function GeneralCommunicationScreen({ navigation }) {
       return;
     }
 
+    const generalOccurredDate = `${generalOccurredYear}-${generalOccurredMonth}-${generalOccurredDay}`;
+    const occurredAt = buildIncidentOccurredAt(generalOccurredDate, generalOccurredTime);
+    if (!occurredAt) {
+      Alert.alert('Time Required', 'Enter the communication time in 24-hour format, for example 14:30.');
+      return;
+    }
+
+    if (new Date(occurredAt).getTime() > Date.now()) {
+      Alert.alert('Date Not Allowed', 'The communication time cannot be in the future.');
+      return;
+    }
+
     try {
       setIsSaving(true);
       const savedEntry = await saveGeneralLogRecord({
@@ -4104,12 +4580,17 @@ function GeneralCommunicationScreen({ navigation }) {
         subject: subject.trim(),
         note: note.trim(),
         staffMember: staffMember.trim(),
+        occurredAt,
       }, selectedStudent);
 
       setGeneralLogs((currentLogs) => [savedEntry, ...currentLogs]);
       setSubject('');
       setNote('');
       setStaffMember('');
+      setGeneralOccurredYear(getCurrentLocalDateString().split('-')[0]);
+      setGeneralOccurredMonth(getCurrentLocalDateString().split('-')[1]);
+      setGeneralOccurredDay(getCurrentLocalDateString().split('-')[2]);
+      setGeneralOccurredTime(getCurrentLocalTimeString());
       Alert.alert('Saved', 'General communication logged in Firestore.');
     } catch (error) {
       Alert.alert('Error', error.message || 'Could not save the general log.');
@@ -4140,6 +4621,19 @@ function GeneralCommunicationScreen({ navigation }) {
           value={subject}
           onChangeText={setSubject}
         />
+        <View style={styles.compactDateFieldWrapper}>
+          <Text style={styles.compactDateLabel}>When It Happened</Text>
+          <TouchableOpacity style={styles.compactDateField} onPress={() => setShowGeneralOccurredDatePicker(true)}>
+            <Text style={styles.compactDateFieldText}>{formatCompactDateDisplay(generalOccurredYear, generalOccurredMonth, generalOccurredDay)}</Text>
+          </TouchableOpacity>
+        </View>
+        <TextInput
+          style={styles.formInput}
+          placeholder="Time happened (HH:MM)"
+          placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+          value={generalOccurredTime}
+          onChangeText={setGeneralOccurredTime}
+        />
         <TextInput
           style={[styles.formInput, styles.reasonInput]}
           placeholder="Note"
@@ -4169,11 +4663,25 @@ function GeneralCommunicationScreen({ navigation }) {
         {loading ? <Text style={styles.statusText}>Loading general records...</Text> : null}
         {errorMessage ? <Text style={styles.errorText}>{errorMessage}</Text> : null}
 
+        <CompactDatePickerModal
+          visible={showGeneralOccurredDatePicker}
+          onClose={() => setShowGeneralOccurredDatePicker(false)}
+          onDateSelect={(y, m, d) => {
+            setGeneralOccurredYear(y);
+            setGeneralOccurredMonth(m);
+            setGeneralOccurredDay(d);
+          }}
+          currentYear={generalOccurredYear}
+          currentMonth={generalOccurredMonth}
+          currentDay={generalOccurredDay}
+        />
+
         <Text style={styles.sectionTitle}>Recent General Logs</Text>
         {generalLogs.map((entry) => (
           <View key={entry.id} style={styles.timelineCard}>
             <Text style={styles.studentName}>{entry.studentName || entry.studentId}</Text>
-            <Text style={styles.timelineMeta}>{formatDateTime(entry.timestamp)}</Text>
+            <Text style={styles.timelineMeta}>Happened: {formatDateTime(entry.occurredAt || entry.timestamp)}</Text>
+            <Text style={styles.tapHint}>Logged: {formatDateTime(entry.createdAt || entry.timestamp)}</Text>
             <Text style={styles.timelineText}>{entry.subject || 'General communication'}</Text>
             <Text style={styles.tapHint}>{entry.note || 'Not recorded'}</Text>
             <Text style={styles.tapHint}>Logged by: {entry.staffMember || 'Not recorded'}</Text>
@@ -4205,10 +4713,10 @@ function ActivitiesScreen({ navigation }) {
   const [showExportModal, setShowExportModal] = useState(false);
   const [showStartPicker, setShowStartPicker] = useState(false);
   const [showEndPicker, setShowEndPicker] = useState(false);
-  const startYear = String(currentYear);
+  const [startYear, setStartYear] = useState(String(currentYear));
   const [startMonth, setStartMonth] = useState(String(currentMonth).padStart(2, '0'));
   const [startDay, setStartDay] = useState(String(currentDay).padStart(2, '0'));
-  const endYear = String(currentYear);
+  const [endYear, setEndYear] = useState(String(currentYear));
   const [endMonth, setEndMonth] = useState(String(currentMonth).padStart(2, '0'));
   const [endDay, setEndDay] = useState(String(currentDay).padStart(2, '0'));
   const [exporting, setExporting] = useState(false);
@@ -4589,11 +5097,12 @@ function ActivitiesScreen({ navigation }) {
         <CompactDatePickerModal
           visible={showStartPicker}
           onClose={() => setShowStartPicker(false)}
-          onDateSelect={(_, m, d) => {
+          onDateSelect={(y, m, d) => {
+            setStartYear(y);
             setStartMonth(m);
             setStartDay(d);
           }}
-          currentYear={currentYear}
+          currentYear={startYear}
           currentMonth={startMonth}
           currentDay={startDay}
         />
@@ -4601,11 +5110,12 @@ function ActivitiesScreen({ navigation }) {
         <CompactDatePickerModal
           visible={showEndPicker}
           onClose={() => setShowEndPicker(false)}
-          onDateSelect={(_, m, d) => {
+          onDateSelect={(y, m, d) => {
+            setEndYear(y);
             setEndMonth(m);
             setEndDay(d);
           }}
-          currentYear={currentYear}
+          currentYear={endYear}
           currentMonth={endMonth}
           currentDay={endDay}
         />
@@ -5255,10 +5765,10 @@ function ComplianceReportsScreen({ navigation }) {
   const currentMonth = parseInt(TODAY.split('-')[1], 10);
   const currentDay = parseInt(TODAY.split('-')[2], 10);
 
-  const startYear = String(currentYear);
+  const [startYear, setStartYear] = useState(String(currentYear));
   const [startMonth, setStartMonth] = useState(String(currentMonth).padStart(2, '0'));
   const [startDay, setStartDay] = useState(String(currentDay).padStart(2, '0'));
-  const endYear = String(currentYear);
+  const [endYear, setEndYear] = useState(String(currentYear));
   const [endMonth, setEndMonth] = useState(String(currentMonth).padStart(2, '0'));
   const [endDay, setEndDay] = useState(String(currentDay).padStart(2, '0'));
 
@@ -5352,7 +5862,7 @@ function ComplianceReportsScreen({ navigation }) {
       });
 
       const filteredIncidents = (incidents || []).filter((incident) => {
-        const incidentDate = (incident?.timestamp || '').split('T')[0];
+        const incidentDate = String(incident?.occurredAt || incident?.timestamp || '').split('T')[0];
         const isInDateRange = incidentDate >= startDate && incidentDate <= endDate;
         const isInSelectedClass = studentIds.has(String(incident?.studentId || '').trim());
         return isInDateRange && isInSelectedClass;
@@ -5366,7 +5876,7 @@ function ComplianceReportsScreen({ navigation }) {
       });
 
       const filteredGeneralLogs = (generalLogs || []).filter((entry) => {
-        const logDate = (entry?.timestamp || '').split('T')[0];
+        const logDate = String(entry?.occurredAt || entry?.timestamp || '').split('T')[0];
         const isInDateRange = logDate >= startDate && logDate <= endDate;
         const isInSelectedClass = studentIds.has(String(entry?.studentId || '').trim());
         return isInDateRange && isInSelectedClass;
@@ -5381,8 +5891,9 @@ function ComplianceReportsScreen({ navigation }) {
       // Build incident table rows
       const incidentRows = filteredIncidents
         .map((incident) => {
-          const incidentTime = incident?.timestamp ? new Date(incident.timestamp).toLocaleString() : '-';
-          return `<tr><td>${escapeHtml(incidentTime)}</td><td>${escapeHtml(incident.location || '-')}</td><td>${escapeHtml(incident.studentName || 'General')}</td><td>${escapeHtml(incident.description || '-')}</td><td>${escapeHtml(incident.actionTaken || '-')}</td></tr>`;
+          const happenedTime = incident?.occurredAt ? new Date(incident.occurredAt).toLocaleString() : (incident?.timestamp ? new Date(incident.timestamp).toLocaleString() : '-');
+          const loggedTime = incident?.createdAt ? new Date(incident.createdAt).toLocaleString() : (incident?.timestamp ? new Date(incident.timestamp).toLocaleString() : '-');
+          return `<tr><td>${escapeHtml(happenedTime)}</td><td>${escapeHtml(loggedTime)}</td><td>${escapeHtml(incident.location || '-')}</td><td>${escapeHtml(incident.studentName || 'General')}</td><td>${escapeHtml(incident.description || '-')}</td><td>${escapeHtml(incident.actionTaken || '-')}</td></tr>`;
         })
         .join('');
 
@@ -5390,14 +5901,16 @@ function ComplianceReportsScreen({ navigation }) {
       const medicineRows = filteredMedicine
         .map((entry) => {
           const medTime = entry?.timeAdministered ? new Date(entry.timeAdministered).toLocaleString() : '-';
-          return `<tr><td>${escapeHtml(medTime)}</td><td>${escapeHtml(entry.studentName || 'Unknown')}</td><td>${escapeHtml(entry.medicationName || '-')}</td><td>${escapeHtml(entry.dosage || '-')}</td><td>${escapeHtml(entry.staffMember || '-')}</td><td>${entry.allergyWarning ? 'YES' : 'No'}</td></tr>`;
+          const loggedTime = entry?.createdAt ? new Date(entry.createdAt).toLocaleString() : medTime;
+          return `<tr><td>${escapeHtml(medTime)}</td><td>${escapeHtml(loggedTime)}</td><td>${escapeHtml(entry.studentName || 'Unknown')}</td><td>${escapeHtml(entry.medicationName || '-')}</td><td>${escapeHtml(entry.dosage || '-')}</td><td>${escapeHtml(entry.staffMember || '-')}</td><td>${entry.allergyWarning ? 'YES' : 'No'}</td></tr>`;
         })
         .join('');
 
       const generalRows = filteredGeneralLogs
         .map((entry) => {
-          const logTime = entry?.timestamp ? new Date(entry.timestamp).toLocaleString() : '-';
-          return `<tr><td>${escapeHtml(logTime)}</td><td>${escapeHtml(entry.studentName || 'Unknown')}</td><td>${escapeHtml(entry.subject || '-')}</td><td>${escapeHtml(entry.note || '-')}</td><td>${escapeHtml(entry.staffMember || '-')}</td></tr>`;
+          const happenedTime = entry?.occurredAt ? new Date(entry.occurredAt).toLocaleString() : (entry?.timestamp ? new Date(entry.timestamp).toLocaleString() : '-');
+          const loggedTime = entry?.createdAt ? new Date(entry.createdAt).toLocaleString() : happenedTime;
+          return `<tr><td>${escapeHtml(happenedTime)}</td><td>${escapeHtml(loggedTime)}</td><td>${escapeHtml(entry.studentName || 'Unknown')}</td><td>${escapeHtml(entry.subject || '-')}</td><td>${escapeHtml(entry.note || '-')}</td><td>${escapeHtml(entry.staffMember || '-')}</td></tr>`;
         })
         .join('');
 
@@ -5495,17 +6008,17 @@ function ComplianceReportsScreen({ navigation }) {
 
             <div class="section">
               <h2>Incident / Accident Register</h2>
-              ${incidentRows ? `<table><thead><tr><th>Date/Time</th><th>Location</th><th>Learner</th><th>Description</th><th>Action Taken</th></tr></thead><tbody>${incidentRows}</tbody></table>` : '<p>No incidents recorded.</p>'}
+              ${incidentRows ? `<table><thead><tr><th>Happened</th><th>Logged</th><th>Location</th><th>Learner</th><th>Description</th><th>Action Taken</th></tr></thead><tbody>${incidentRows}</tbody></table>` : '<p>No incidents recorded.</p>'}
             </div>
 
             <div class="section">
               <h2>Medicine Administration Log</h2>
-              ${medicineRows ? `<table><thead><tr><th>Date/Time</th><th>Learner</th><th>Medication</th><th>Dosage</th><th>Staff Member</th><th>Allergy Warning</th></tr></thead><tbody>${medicineRows}</tbody></table>` : '<p>No medicine logs recorded.</p>'}
+              ${medicineRows ? `<table><thead><tr><th>Given</th><th>Logged</th><th>Learner</th><th>Medication</th><th>Dosage</th><th>Staff Member</th><th>Allergy Warning</th></tr></thead><tbody>${medicineRows}</tbody></table>` : '<p>No medicine logs recorded.</p>'}
             </div>
 
             <div class="section">
               <h2>General Communication Log</h2>
-              ${generalRows ? `<table><thead><tr><th>Date/Time</th><th>Learner</th><th>Subject</th><th>Note</th><th>Staff Member</th></tr></thead><tbody>${generalRows}</tbody></table>` : '<p>No general communication logs recorded.</p>'}
+              ${generalRows ? `<table><thead><tr><th>Happened</th><th>Logged</th><th>Learner</th><th>Subject</th><th>Note</th><th>Staff Member</th></tr></thead><tbody>${generalRows}</tbody></table>` : '<p>No general communication logs recorded.</p>'}
             </div>
           </body>
         </html>
@@ -5595,11 +6108,12 @@ function ComplianceReportsScreen({ navigation }) {
         <CompactDatePickerModal
           visible={showStartPicker}
           onClose={() => setShowStartPicker(false)}
-          onDateSelect={(_, m, d) => {
+          onDateSelect={(y, m, d) => {
+            setStartYear(y);
             setStartMonth(m);
             setStartDay(d);
           }}
-          currentYear={currentYear}
+          currentYear={startYear}
           currentMonth={startMonth}
           currentDay={startDay}
         />
@@ -5607,11 +6121,12 @@ function ComplianceReportsScreen({ navigation }) {
         <CompactDatePickerModal
           visible={showEndPicker}
           onClose={() => setShowEndPicker(false)}
-          onDateSelect={(_, m, d) => {
+          onDateSelect={(y, m, d) => {
+            setEndYear(y);
             setEndMonth(m);
             setEndDay(d);
           }}
-          currentYear={currentYear}
+          currentYear={endYear}
           currentMonth={endMonth}
           currentDay={endDay}
         />
@@ -5647,7 +6162,7 @@ function CompactDatePickerColumn({ items, selectedValue, onSelect, label }) {
     <View style={styles.compactDatePickerColumnContainer}>
       <Text style={styles.compactDatePickerLabel}>{label}</Text>
       <View style={styles.compactDatePickerScrollBound}>
-        <View style={styles.compactDatePickerOverlay} />
+        <View pointerEvents="none" style={styles.compactDatePickerOverlay} />
         <ScrollView
           ref={scrollViewRef}
           scrollEventThrottle={16}
@@ -5675,6 +6190,34 @@ function CompactDatePickerColumn({ items, selectedValue, onSelect, label }) {
         </ScrollView>
       </View>
     </View>
+  );
+}
+
+function LearnerHistoryModal({ visible, title, emptyText, loading, onClose, children }) {
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <View style={styles.modalBackdrop}>
+        <TouchableOpacity style={styles.modalBackdropTouchable} activeOpacity={1} onPress={onClose} />
+        <View style={styles.modalCard}>
+          <Text style={styles.modalTitle}>{title}</Text>
+          <ScrollView
+            style={styles.modalScrollContent}
+            contentContainerStyle={styles.modalScrollContentInner}
+            keyboardShouldPersistTaps="handled"
+            nestedScrollEnabled
+            showsVerticalScrollIndicator
+          >
+            {loading ? <Text style={styles.statusText}>Loading history...</Text> : null}
+            {!loading && !children ? <Text style={styles.statusText}>{emptyText}</Text> : children}
+          </ScrollView>
+          <View style={styles.modalButtonsRow}>
+            <TouchableOpacity style={styles.modalButtonSecondary} onPress={onClose}>
+              <Text style={styles.modalButtonSecondaryText}>Close</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </Modal>
   );
 }
 

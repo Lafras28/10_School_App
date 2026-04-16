@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import uuid
 from typing import Optional
 
@@ -60,10 +61,23 @@ def create_incident_record(payload: dict, student: Optional[dict] = None) -> dic
         student_name = f'{first_name} {last_name}'.strip()
 
     created_at = utc_now_iso()
+    raw_occurred_at = str(payload.get('occurredAt') or '').strip()
+    if raw_occurred_at:
+        try:
+            parsed_occurred_at = datetime.fromisoformat(raw_occurred_at.replace('Z', '+00:00'))
+        except ValueError as exc:
+            raise ValueError('occurredAt must be a valid incident date and time.') from exc
+        if parsed_occurred_at.tzinfo is None:
+            parsed_occurred_at = parsed_occurred_at.replace(tzinfo=timezone.utc)
+        occurred_at = parsed_occurred_at.astimezone(timezone.utc).isoformat()
+    else:
+        occurred_at = created_at
+
     record = {
         'id': f"inc-{uuid.uuid4().hex[:10]}",
         'studentId': student_id,
         'studentName': student_name,
+        'occurredAt': occurred_at,
         'timestamp': created_at,
         'location': location,
         'description': description,

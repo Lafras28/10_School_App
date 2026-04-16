@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import re
 import uuid
 from typing import Optional
@@ -79,6 +80,18 @@ def create_medicine_record(payload: dict, student: Optional[dict] = None) -> dic
         allergies = str(student.get('allergies') or allergies).strip()
 
     created_at = utc_now_iso()
+    raw_time_administered = str(payload.get('timeAdministered') or payload.get('administeredAt') or '').strip()
+    if raw_time_administered:
+        try:
+            parsed_time_administered = datetime.fromisoformat(raw_time_administered.replace('Z', '+00:00'))
+        except ValueError as exc:
+            raise ValueError('timeAdministered must be a valid medicine date and time.') from exc
+        if parsed_time_administered.tzinfo is None:
+            parsed_time_administered = parsed_time_administered.replace(tzinfo=timezone.utc)
+        time_administered = parsed_time_administered.astimezone(timezone.utc).isoformat()
+    else:
+        time_administered = created_at
+
     allergy_warning = has_allergy_warning(medication_name, allergies)
     record = {
         'id': f"med-{uuid.uuid4().hex[:10]}",
@@ -89,7 +102,7 @@ def create_medicine_record(payload: dict, student: Optional[dict] = None) -> dic
         'staffMember': staff_member,
         'allergies': allergies,
         'allergyWarning': allergy_warning,
-        'timeAdministered': created_at,
+        'timeAdministered': time_administered,
         'createdAt': created_at,
     }
 

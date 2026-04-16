@@ -1,7 +1,7 @@
 import csv
 import json
 import os
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
 
@@ -401,6 +401,31 @@ def list_attendance():
     return jsonify({'date': register_date, 'entries': entries}), 200
 
 
+@app.get('/attendance/history')
+def list_attendance_history():
+    student_id = str(request.args.get('studentId') or '').strip()
+    default_end = datetime.now().date().isoformat()
+    default_start = (datetime.now().date() - timedelta(days=365)).isoformat()
+
+    try:
+        start_date = normalize_register_date(request.args.get('startDate') or default_start)
+        end_date = normalize_register_date(request.args.get('endDate') or default_end)
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+
+    if start_date > end_date:
+        return jsonify({'error': 'startDate must be before or equal to endDate.'}), 400
+
+    students = load_students()
+    entries = list_attendance_entries_for_range(start_date, end_date, students)
+
+    if student_id:
+        entries = [entry for entry in entries if str(entry.get('studentId') or '').strip() == student_id]
+
+    entries = [entry for entry in entries if entry.get('status') in ['Late', 'Absent']]
+    return jsonify({'entries': entries, 'startDate': start_date, 'endDate': end_date}), 200
+
+
 @app.put('/attendance/<register_date>/<student_id>')
 def update_attendance(register_date, student_id):
     student = get_student_by_id(student_id)
@@ -410,6 +435,9 @@ def update_attendance(register_date, student_id):
     payload = request.get_json(silent=True) or {}
     try:
         normalized_date = normalize_register_date(register_date)
+        client_local_date = normalize_register_date(payload.get('clientLocalDate') or datetime.now().date().isoformat())
+        if normalized_date != client_local_date:
+            return jsonify({'error': 'Attendance locks at 12:00 AM. Only today\'s attendance can still be updated.'}), 403
         entry = update_attendance_entry(
             normalized_date,
             student,
@@ -519,9 +547,9 @@ def export_compliance_report():
     attendance_entries = list_attendance_entries_for_range(start_date, end_date, students, db, school_id)
     # Filter to only include Late and Absent entries, exclude Present
     attendance_entries = [entry for entry in attendance_entries if entry.get('status') in ['Late', 'Absent']]
-    incidents = filter_records_by_created_at(list_incidents(db, school_id), start_date, end_date, field_name='timestamp')
+    incidents = filter_records_by_created_at(list_incidents(db, school_id), start_date, end_date, field_name='occurredAt')
     medicine_entries = filter_records_by_created_at(list_medicine_logs(db, school_id), start_date, end_date, field_name='timeAdministered')
-    general_entries = filter_records_by_created_at(list_general_logs(db, school_id), start_date, end_date, field_name='timestamp')
+    general_entries = filter_records_by_created_at(list_general_logs(db, school_id), start_date, end_date, field_name='occurredAt')
 
     pdf_bytes = build_compliance_report_pdf(
         school_name=school_name,

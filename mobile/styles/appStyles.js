@@ -479,6 +479,13 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     padding: 24,
   },
+  modalBackdropTouchable: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+  },
   modalCard: {
     backgroundColor: '#FFFFFF',
     borderRadius: 8,
@@ -497,6 +504,14 @@ const styles = StyleSheet.create({
     color: '#3C4043',
     marginBottom: 12,
     lineHeight: 22,
+  },
+  modalScrollContent: {
+    maxHeight: 420,
+    marginBottom: 16,
+  },
+  modalScrollContentInner: {
+    paddingBottom: 8,
+    gap: 10,
   },
   pinInput: {
     borderWidth: 1,
