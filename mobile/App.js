@@ -455,6 +455,35 @@ async function saveStudentRecord(mode, payload, initialStudent) {
   }
 }
 
+async function deleteStudentRecord(studentId) {
+  const normalizedId = String(studentId || '').trim();
+  if (!normalizedId) {
+    throw new Error('Student ID is required to remove a learner.');
+  }
+
+  let firestoreError = null;
+  try {
+    await deleteStudentFromFirestore(normalizedId);
+  } catch (error) {
+    firestoreError = error;
+    console.warn('Firestore student delete failed, trying backend fallback.', error);
+  }
+
+  try {
+    await fetchJson(`${API_BASE_URL}/students/${normalizedId}`, {
+      method: 'DELETE',
+    });
+    return true;
+  } catch (backendError) {
+    if (!firestoreError) {
+      console.warn('Backend student delete failed after Firestore delete.', backendError);
+      return true;
+    }
+
+    throw backendError;
+  }
+}
+
 function buildDefaultAttendanceEntries(registerDate, students = []) {
   return (Array.isArray(students) ? students : [])
     .map((student) => ({
@@ -3448,7 +3477,7 @@ function EmergencyProfileScreen({ route, navigation }) {
           style: 'destructive',
           onPress: async () => {
             try {
-              await deleteStudentFromFirestore(resolvedStudentId);
+              await deleteStudentRecord(resolvedStudentId);
               Alert.alert('Deleted', `${getStudentFullName(student)} has been removed.`);
               navigation.navigate('StudentDirectory');
             } catch (error) {

@@ -619,5 +619,17 @@ def update_student(student_id):
     return jsonify({'message': 'Student updated.', 'student': merged_student}), 200
 
 
+@app.delete('/students/<student_id>')
+def delete_student(student_id):
+    students = load_students()
+    index = next((idx for idx, student in enumerate(students) if student['id'] == student_id), None)
+    if index is None:
+        return jsonify({'error': 'Student not found.'}), 404
+
+    removed_student = students.pop(index)
+    save_students_to_xlsx(students)
+    return jsonify({'message': 'Student removed.', 'student': removed_student}), 200
+
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
