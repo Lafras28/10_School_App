@@ -87,6 +87,11 @@ service cloud.firestore {
         allow write: if sameSchool(schoolId) && hasPerm('canLogMedicine');
       }
 
+      match /general_logs/{docId} {
+        allow read: if sameSchool(schoolId);
+        allow write: if sameSchool(schoolId) && hasPerm('canLogGeneral');
+      }
+
       match /activities/{docId} {
         allow read: if sameSchool(schoolId);
         allow write: if sameSchool(schoolId) && (

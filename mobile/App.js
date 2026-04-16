@@ -3427,7 +3427,14 @@ function EmergencyProfileScreen({ route, navigation }) {
   };
 
   const handleDeleteStudent = () => {
-    if (!canEditStudents || !student?.id) {
+    if (!canEditStudents) {
+      Alert.alert('Access Restricted', 'Only principal/admin users can remove learners.');
+      return;
+    }
+
+    const resolvedStudentId = String(student?.id || student?.studentId || '').trim();
+    if (!resolvedStudentId) {
+      Alert.alert('Could Not Remove', 'This learner record is missing an ID, so it cannot be removed.');
       return;
     }
 
@@ -3441,7 +3448,7 @@ function EmergencyProfileScreen({ route, navigation }) {
           style: 'destructive',
           onPress: async () => {
             try {
-              await deleteStudentFromFirestore(student.id);
+              await deleteStudentFromFirestore(resolvedStudentId);
               Alert.alert('Deleted', `${getStudentFullName(student)} has been removed.`);
               navigation.navigate('StudentDirectory');
             } catch (error) {
