@@ -461,26 +461,44 @@ async function deleteStudentRecord(studentId) {
     throw new Error('Student ID is required to remove a learner.');
   }
 
+  const deleteFromBackend = async (timeoutMs = 8000) => {
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timeoutHandle = setTimeout(() => {
+      if (controller) {
+        controller.abort();
+      }
+    }, timeoutMs);
+
+    try {
+      await fetchJson(`${API_BASE_URL}/students/${normalizedId}`, {
+        method: 'DELETE',
+        ...(controller ? { signal: controller.signal } : {}),
+      });
+    } finally {
+      clearTimeout(timeoutHandle);
+    }
+  };
+
   let firestoreError = null;
   try {
     await deleteStudentFromFirestore(normalizedId);
+    // If Firestore succeeds, complete immediately so the UI never feels stuck.
+    deleteFromBackend(5000).catch((backendError) => {
+      console.warn('Backend student delete sync skipped after Firestore delete.', backendError);
+    });
+    return true;
   } catch (error) {
     firestoreError = error;
     console.warn('Firestore student delete failed, trying backend fallback.', error);
   }
 
   try {
-    await fetchJson(`${API_BASE_URL}/students/${normalizedId}`, {
-      method: 'DELETE',
-    });
+    await deleteFromBackend(10000);
     return true;
   } catch (backendError) {
-    if (!firestoreError) {
-      console.warn('Backend student delete failed after Firestore delete.', backendError);
-      return true;
-    }
-
-    throw backendError;
+    const firestoreMessage = firestoreError?.message ? ` Firestore: ${firestoreError.message}` : '';
+    const backendMessage = backendError?.message ? ` Backend: ${backendError.message}` : '';
+    throw new Error(`Could not remove learner.${firestoreMessage}${backendMessage}`.trim());
   }
 }
 
