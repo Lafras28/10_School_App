@@ -6828,6 +6828,28 @@ function ComplianceReportsScreen({ navigation }) {
       return;
     }
 
+    const exportWindow = Platform.OS === 'web' && typeof window !== 'undefined'
+      ? window.open('', '_blank')
+      : null;
+
+    if (Platform.OS === 'web' && !exportWindow) {
+      Alert.alert('Popup Blocked', 'Allow popups for this site, then try the compliance PDF export again.');
+      return;
+    }
+
+    if (exportWindow) {
+      exportWindow.document.write(`
+        <html>
+          <head><title>Generating Compliance PDF...</title></head>
+          <body style="font-family: Arial, sans-serif; padding: 24px; color: #102A43;">
+            <h2 style="margin: 0 0 12px 0;">Generating compliance report...</h2>
+            <p style="margin: 0;">Your PDF export will open automatically when it is ready.</p>
+          </body>
+        </html>
+      `);
+      exportWindow.document.close();
+    }
+
     setIsGenerating(true);
     try {
       const escapeHtml = (value) => String(value || '')
@@ -7026,7 +7048,11 @@ function ComplianceReportsScreen({ navigation }) {
         const printHtml = html.replace('</body>', '<script>window.print();<\/script></body>');
         const blob = new Blob([printHtml], { type: 'text/html' });
         const url = URL.createObjectURL(blob);
-        window.open(url, '_blank');
+        if (exportWindow && !exportWindow.closed) {
+          exportWindow.location.replace(url);
+        } else {
+          window.open(url, '_blank');
+        }
       } else {
         const file = await Print.printToFileAsync({ html });
         const canShare = await Sharing.isAvailableAsync();
@@ -7041,6 +7067,9 @@ function ComplianceReportsScreen({ navigation }) {
         }
       }
     } catch (error) {
+      if (exportWindow && !exportWindow.closed) {
+        exportWindow.close();
+      }
       Alert.alert('Export Failed', error.message || 'Could not generate compliance report.');
     } finally {
       setIsGenerating(false);
