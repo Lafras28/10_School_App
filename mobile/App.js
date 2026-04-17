@@ -104,6 +104,8 @@ const TODAY = new Date().toISOString().split('T')[0];
 const DEFAULT_SCHOOL_NAME = 'Greenhill';
 const PARENT_ABSENT_REASON = 'Parent marked absent in app';
 const HISTORY_CACHE_KEY_PREFIX = 'schoolapp:history-cache:';
+const HISTORY_FIRESTORE_TIMEOUT_MS = 12000;
+const HISTORY_FIRESTORE_RETRY_DELAY_MS = 1200;
 
 function getHistoryCacheKey(studentId, historyType) {
   return `${HISTORY_CACHE_KEY_PREFIX}${studentId}:${historyType}`;
@@ -429,6 +431,34 @@ async function withTimeout(taskPromise, timeoutMs = 12000, timeoutMessage = 'Req
   }
 }
 
+function delayMs(durationMs) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, durationMs);
+  });
+}
+
+async function readFirestoreHistoryWithRetry(task, label = 'Firestore history read') {
+  let lastError;
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      return await withTimeout(
+        Promise.resolve().then(task),
+        HISTORY_FIRESTORE_TIMEOUT_MS,
+        'Firestore history sync is taking too long. Using fallback data.',
+      );
+    } catch (error) {
+      lastError = error;
+      if (attempt === 0) {
+        console.warn(`${label} delayed, retrying once after warm-up.`, error);
+        await delayMs(HISTORY_FIRESTORE_RETRY_DELAY_MS);
+      }
+    }
+  }
+
+  throw lastError;
+}
+
 function getStudentsCacheKey(accessProfile) {
   const schoolId = String(accessProfile?.schoolId || DEFAULT_SCHOOL_NAME || 'default-school').trim().toLowerCase();
   return `${STUDENTS_CACHE_KEY_PREFIX}${schoolId || 'default-school'}`;
@@ -458,15 +488,29 @@ async function saveStudentsToCache(accessProfile, students) {
 }
 
 async function fetchJson(url, options = {}) {
+  const timeoutMs = Number(options?.timeoutMs ?? 8000);
+  const controller = new AbortController();
+  const timeoutHandle = setTimeout(() => {
+    controller.abort();
+  }, timeoutMs);
+
+  const { timeoutMs: _unusedTimeoutMs, signal: providedSignal, ...fetchOptions } = options || {};
+  const signal = providedSignal || controller.signal;
   let response;
 
   try {
-    response = await fetch(url, options);
+    response = await fetch(url, { ...fetchOptions, signal });
   } catch (error) {
+    clearTimeout(timeoutHandle);
+    if (error?.name === 'AbortError') {
+      throw new Error('Request timed out. Please check your connection and try again.');
+    }
     throw new Error(
       `Could not reach the backend at ${API_BASE_URL}. For phone use away from your laptop, set EXPO_PUBLIC_API_URL to your hosted backend URL.`,
     );
   }
+
+  clearTimeout(timeoutHandle);
 
   const data = await response.json().catch(() => null);
 
@@ -695,7 +739,10 @@ async function saveAttendanceRecord(registerDate, entry, status, reason = '') {
 
 async function loadIncidentsFromDataStore() {
   try {
-    const firestoreIncidents = await fetchIncidentsFromFirestore();
+    const firestoreIncidents = await readFirestoreHistoryWithRetry(
+      () => fetchIncidentsFromFirestore(),
+      'Firestore incidents read',
+    );
     if (Array.isArray(firestoreIncidents)) {
       return firestoreIncidents;
     }
@@ -737,7 +784,10 @@ async function saveIncidentRecord(payload, student = null) {
 
 async function loadMedicineLogsFromDataStore() {
   try {
-    const firestoreLogs = await fetchMedicineLogsFromFirestore();
+    const firestoreLogs = await readFirestoreHistoryWithRetry(
+      () => fetchMedicineLogsFromFirestore(),
+      'Firestore medicine logs read',
+    );
     if (Array.isArray(firestoreLogs)) {
       return firestoreLogs;
     }
@@ -761,7 +811,10 @@ async function loadMedicineLogsFromDataStore() {
 
 async function loadGeneralLogsFromDataStore() {
   try {
-    const firestoreLogs = await fetchGeneralLogsFromFirestore();
+    const firestoreLogs = await readFirestoreHistoryWithRetry(
+      () => fetchGeneralLogsFromFirestore(),
+      'Firestore general logs read',
+    );
     if (Array.isArray(firestoreLogs)) {
       return firestoreLogs;
     }
@@ -794,9 +847,14 @@ async function loadAttendanceHistoryForStudentFromDataStore(studentId, options =
   const startDate = String(options?.startDate || defaultStartDate).trim();
   const endDate = String(options?.endDate || defaultEndDate).trim();
   const mergedEntries = new Map();
+  let hasFirestoreData = false;
 
   try {
-    const firestoreEntries = await fetchAttendanceHistoryForStudentFromFirestore(normalizedStudentId);
+    const firestoreEntries = await readFirestoreHistoryWithRetry(
+      () => fetchAttendanceHistoryForStudentFromFirestore(normalizedStudentId),
+      'Firestore attendance history read',
+    );
+    hasFirestoreData = Array.isArray(firestoreEntries) && firestoreEntries.length > 0;
     firestoreEntries.forEach((entry) => {
       const key = String(entry?.id || `${entry?.date || ''}_${entry?.studentId || ''}`).trim();
       if (key) {
@@ -807,9 +865,16 @@ async function loadAttendanceHistoryForStudentFromDataStore(studentId, options =
     console.warn('Firestore learner attendance history unavailable, checking backend fallback.', error);
   }
 
+  if (hasFirestoreData) {
+    return Array.from(mergedEntries.values())
+      .filter((entry) => String(entry?.studentId || '').trim() === normalizedStudentId)
+      .sort((left, right) => String(right?.date || right?.createdAt || '').localeCompare(String(left?.date || left?.createdAt || '')));
+  }
+
   try {
     const fallbackData = await fetchJson(
       `${API_BASE_URL}/attendance/history?studentId=${encodeURIComponent(normalizedStudentId)}&startDate=${encodeURIComponent(startDate)}&endDate=${encodeURIComponent(endDate)}`,
+      { timeoutMs: 8000 },
     );
     const fallbackEntries = Array.isArray(fallbackData?.entries) ? fallbackData.entries : [];
     fallbackEntries.forEach((entry) => {
@@ -839,7 +904,10 @@ async function loadIncidentsForStudentFromDataStore(studentId) {
   }
 
   try {
-    return await fetchIncidentsForStudentFromFirestore(normalizedStudentId);
+    return await readFirestoreHistoryWithRetry(
+      () => fetchIncidentsForStudentFromFirestore(normalizedStudentId),
+      'Firestore learner incidents read',
+    );
   } catch (error) {
     console.warn('Firestore learner incidents unavailable, using broader fallback.', error);
     const incidents = await loadIncidentsFromDataStore();
@@ -854,7 +922,10 @@ async function loadMedicineLogsForStudentFromDataStore(studentId) {
   }
 
   try {
-    return await fetchMedicineLogsForStudentFromFirestore(normalizedStudentId);
+    return await readFirestoreHistoryWithRetry(
+      () => fetchMedicineLogsForStudentFromFirestore(normalizedStudentId),
+      'Firestore learner medicine logs read',
+    );
   } catch (error) {
     console.warn('Firestore learner medicine logs unavailable, using broader fallback.', error);
     const logs = await loadMedicineLogsFromDataStore();
@@ -869,7 +940,10 @@ async function loadGeneralLogsForStudentFromDataStore(studentId) {
   }
 
   try {
-    return await fetchGeneralLogsForStudentFromFirestore(normalizedStudentId);
+    return await readFirestoreHistoryWithRetry(
+      () => fetchGeneralLogsForStudentFromFirestore(normalizedStudentId),
+      'Firestore learner general logs read',
+    );
   } catch (error) {
     console.warn('Firestore learner general logs unavailable, using broader fallback.', error);
     const logs = await loadGeneralLogsFromDataStore();
