@@ -104,6 +104,7 @@ const TODAY = new Date().toISOString().split('T')[0];
 const DEFAULT_SCHOOL_NAME = 'Greenhill';
 const PARENT_ABSENT_REASON = 'Parent marked absent in app';
 const STUDENTS_CACHE_KEY_PREFIX = 'schoolapp:students-cache:';
+const SAVED_CREDENTIALS_KEY = 'schoolapp:saved-credentials';
 
 function getCurrentLocalDateString() {
   const now = new Date();
@@ -912,6 +913,17 @@ function LoginScreen({ onLogin, isBusy }) {
   const [forgotMessage, setForgotMessage] = useState('');
   const [forgotError, setForgotError] = useState('');
 
+  useEffect(() => {
+    AsyncStorage.getItem(SAVED_CREDENTIALS_KEY).then((raw) => {
+      if (!raw) return;
+      try {
+        const saved = JSON.parse(raw);
+        if (saved?.email) setIdentifier(saved.email);
+        if (saved?.password) setPassword(saved.password);
+      } catch (_e) { /* ignore */ }
+    });
+  }, []);
+
   const handleLogin = async () => {
     if (!identifier.trim() || !password.trim()) {
       Alert.alert('Missing Details', 'Enter your staff email and password.');
@@ -921,6 +933,7 @@ function LoginScreen({ onLogin, isBusy }) {
     try {
       setErrorMessage('');
       await onLogin(identifier.trim(), password);
+      AsyncStorage.setItem(SAVED_CREDENTIALS_KEY, JSON.stringify({ email: identifier.trim(), password }));
     } catch (error) {
       setErrorMessage(formatAuthError(error));
     }
@@ -1301,6 +1314,14 @@ export default function App() {
       setAuthBusy(false);
     }
   };
+
+  // Auto-logout after 30 minutes of being signed in
+  useEffect(() => {
+    if (!authUser) return;
+    const timer = setTimeout(() => { handleLogout(); }, 30 * 60 * 1000);
+    return () => clearTimeout(timer);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authUser]);
 
   if (!authReady) {
     return (
@@ -3115,12 +3136,14 @@ function StudentClassFolderScreen({ route, navigation }) {
                   value={incidentLocation}
                   onChangeText={setIncidentLocation}
                 />
-                <View style={styles.compactDateFieldWrapper}>
-                  <Text style={styles.compactDateLabel}>When It Happened</Text>
-                  <TouchableOpacity style={styles.compactDateField} onPress={() => setShowIncidentOccurredDatePicker(true)}>
-                    <Text style={styles.compactDateFieldText}>{formatCompactDateDisplay(incidentOccurredYear, incidentOccurredMonth, incidentOccurredDay)}</Text>
-                  </TouchableOpacity>
-                </View>
+                {Platform.OS !== 'web' ? (
+                  <View style={styles.compactDateFieldWrapper}>
+                    <Text style={styles.compactDateLabel}>When It Happened</Text>
+                    <TouchableOpacity style={styles.compactDateField} onPress={() => setShowIncidentOccurredDatePicker(true)}>
+                      <Text style={styles.compactDateFieldText}>{formatCompactDateDisplay(incidentOccurredYear, incidentOccurredMonth, incidentOccurredDay)}</Text>
+                    </TouchableOpacity>
+                  </View>
+                ) : null}
                 <TextInput
                   style={styles.formInput}
                   placeholder="Time happened (HH:MM)"
@@ -3208,12 +3231,14 @@ function StudentClassFolderScreen({ route, navigation }) {
                   value={medicineName}
                   onChangeText={setMedicineName}
                 />
-                <View style={styles.compactDateFieldWrapper}>
-                  <Text style={styles.compactDateLabel}>When It Was Given</Text>
-                  <TouchableOpacity style={styles.compactDateField} onPress={() => setShowMedicineOccurredDatePicker(true)}>
-                    <Text style={styles.compactDateFieldText}>{formatCompactDateDisplay(medicineOccurredYear, medicineOccurredMonth, medicineOccurredDay)}</Text>
-                  </TouchableOpacity>
-                </View>
+                {Platform.OS !== 'web' ? (
+                  <View style={styles.compactDateFieldWrapper}>
+                    <Text style={styles.compactDateLabel}>When It Was Given</Text>
+                    <TouchableOpacity style={styles.compactDateField} onPress={() => setShowMedicineOccurredDatePicker(true)}>
+                      <Text style={styles.compactDateFieldText}>{formatCompactDateDisplay(medicineOccurredYear, medicineOccurredMonth, medicineOccurredDay)}</Text>
+                    </TouchableOpacity>
+                  </View>
+                ) : null}
                 <TextInput
                   style={styles.formInput}
                   placeholder="Time given (HH:MM)"
@@ -3287,12 +3312,14 @@ function StudentClassFolderScreen({ route, navigation }) {
                   value={generalSubject}
                   onChangeText={setGeneralSubject}
                 />
-                <View style={styles.compactDateFieldWrapper}>
-                  <Text style={styles.compactDateLabel}>When It Happened</Text>
-                  <TouchableOpacity style={styles.compactDateField} onPress={() => setShowGeneralOccurredDatePicker(true)}>
-                    <Text style={styles.compactDateFieldText}>{formatCompactDateDisplay(generalOccurredYear, generalOccurredMonth, generalOccurredDay)}</Text>
-                  </TouchableOpacity>
-                </View>
+                {Platform.OS !== 'web' ? (
+                  <View style={styles.compactDateFieldWrapper}>
+                    <Text style={styles.compactDateLabel}>When It Happened</Text>
+                    <TouchableOpacity style={styles.compactDateField} onPress={() => setShowGeneralOccurredDatePicker(true)}>
+                      <Text style={styles.compactDateFieldText}>{formatCompactDateDisplay(generalOccurredYear, generalOccurredMonth, generalOccurredDay)}</Text>
+                    </TouchableOpacity>
+                  </View>
+                ) : null}
                 <TextInput
                   style={styles.formInput}
                   placeholder="Time happened (HH:MM)"
@@ -6863,22 +6890,48 @@ function ComplianceReportsScreen({ navigation }) {
         <View style={styles.compactDateRangeContainer}>
           <View style={styles.compactDateFieldWrapper}>
             <Text style={styles.compactDateLabel}>Start Date</Text>
-            <TouchableOpacity
-              style={styles.compactDateField}
-              onPress={() => setShowStartPicker(true)}
-            >
-              <Text style={styles.compactDateFieldText}>{formatCompactDateDisplay(startYear, startMonth, startDay)}</Text>
-            </TouchableOpacity>
+            {Platform.OS === 'web' ? (
+              <input
+                type="date"
+                value={`${startYear}-${startMonth}-${startDay}`}
+                onChange={(e) => {
+                  if (!e.target.value) return;
+                  const [y, m, d] = e.target.value.split('-');
+                  setStartYear(y); setStartMonth(m); setStartDay(d);
+                }}
+                style={{ fontSize: 15, padding: 8, borderRadius: 6, border: '1px solid #ccc', width: '100%', boxSizing: 'border-box' }}
+              />
+            ) : (
+              <TouchableOpacity
+                style={styles.compactDateField}
+                onPress={() => setShowStartPicker(true)}
+              >
+                <Text style={styles.compactDateFieldText}>{formatCompactDateDisplay(startYear, startMonth, startDay)}</Text>
+              </TouchableOpacity>
+            )}
           </View>
 
           <View style={styles.compactDateFieldWrapper}>
             <Text style={styles.compactDateLabel}>End Date</Text>
-            <TouchableOpacity
-              style={styles.compactDateField}
-              onPress={() => setShowEndPicker(true)}
-            >
-              <Text style={styles.compactDateFieldText}>{formatCompactDateDisplay(endYear, endMonth, endDay)}</Text>
-            </TouchableOpacity>
+            {Platform.OS === 'web' ? (
+              <input
+                type="date"
+                value={`${endYear}-${endMonth}-${endDay}`}
+                onChange={(e) => {
+                  if (!e.target.value) return;
+                  const [y, m, d] = e.target.value.split('-');
+                  setEndYear(y); setEndMonth(m); setEndDay(d);
+                }}
+                style={{ fontSize: 15, padding: 8, borderRadius: 6, border: '1px solid #ccc', width: '100%', boxSizing: 'border-box' }}
+              />
+            ) : (
+              <TouchableOpacity
+                style={styles.compactDateField}
+                onPress={() => setShowEndPicker(true)}
+              >
+                <Text style={styles.compactDateFieldText}>{formatCompactDateDisplay(endYear, endMonth, endDay)}</Text>
+              </TouchableOpacity>
+            )}
           </View>
         </View>
 
