@@ -5,6 +5,7 @@ import {
   Linking,
   Modal,
   Platform,
+  RefreshControl,
   SafeAreaView,
   ScrollView,
   Text,
@@ -17,6 +18,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import Constants from 'expo-constants';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { NavigationContainer, useFocusEffect } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import {
@@ -47,6 +49,7 @@ import {
   saveIncidentToFirestore,
   saveMedicineLogToFirestore,
   saveStudentToFirestore,
+  subscribeStudentsFromFirestore,
   seedAttendanceToFirestore,
   seedGeneralLogsToFirestore,
   seedIncidentsToFirestore,
@@ -100,6 +103,7 @@ const FORM_PLACEHOLDER_COLOR = '#334E68';
 const TODAY = new Date().toISOString().split('T')[0];
 const DEFAULT_SCHOOL_NAME = 'Greenhill';
 const PARENT_ABSENT_REASON = 'Parent marked absent in app';
+const STUDENTS_CACHE_KEY_PREFIX = 'schoolapp:students-cache:';
 
 function getCurrentLocalDateString() {
   const now = new Date();
@@ -400,6 +404,34 @@ async function withTimeout(taskPromise, timeoutMs = 12000, timeoutMessage = 'Req
   }
 }
 
+function getStudentsCacheKey(accessProfile) {
+  const schoolId = String(accessProfile?.schoolId || DEFAULT_SCHOOL_NAME || 'default-school').trim().toLowerCase();
+  return `${STUDENTS_CACHE_KEY_PREFIX}${schoolId || 'default-school'}`;
+}
+
+async function loadStudentsFromCache(accessProfile) {
+  try {
+    const raw = await AsyncStorage.getItem(getStudentsCacheKey(accessProfile));
+    if (!raw) {
+      return [];
+    }
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (error) {
+    console.warn('Could not load cached students.', error);
+    return [];
+  }
+}
+
+async function saveStudentsToCache(accessProfile, students) {
+  try {
+    const safeStudents = Array.isArray(students) ? students : [];
+    await AsyncStorage.setItem(getStudentsCacheKey(accessProfile), JSON.stringify(safeStudents));
+  } catch (error) {
+    console.warn('Could not save students cache.', error);
+  }
+}
+
 async function fetchJson(url, options = {}) {
   let response;
 
@@ -426,7 +458,7 @@ async function fetchJson(url, options = {}) {
 async function loadStudentsFromDataStore() {
   try {
     const firestoreStudents = await fetchStudentsFromFirestore();
-    if (Array.isArray(firestoreStudents) && firestoreStudents.length > 0) {
+    if (Array.isArray(firestoreStudents)) {
       return firestoreStudents;
     }
   } catch (error) {
@@ -562,7 +594,7 @@ async function loadAttendanceFromDataStore(registerDate, students = []) {
 
   try {
     const firestoreEntries = await fetchAttendanceFromFirestore(registerDate);
-    if (Array.isArray(firestoreEntries) && firestoreEntries.length > 0) {
+    if (Array.isArray(firestoreEntries)) {
       return mergeAttendanceEntries(firestoreEntries);
     }
   } catch (error) {
@@ -639,7 +671,7 @@ async function saveAttendanceRecord(registerDate, entry, status, reason = '') {
 async function loadIncidentsFromDataStore() {
   try {
     const firestoreIncidents = await fetchIncidentsFromFirestore();
-    if (Array.isArray(firestoreIncidents) && firestoreIncidents.length > 0) {
+    if (Array.isArray(firestoreIncidents)) {
       return firestoreIncidents;
     }
   } catch (error) {
@@ -681,7 +713,7 @@ async function saveIncidentRecord(payload, student = null) {
 async function loadMedicineLogsFromDataStore() {
   try {
     const firestoreLogs = await fetchMedicineLogsFromFirestore();
-    if (Array.isArray(firestoreLogs) && firestoreLogs.length > 0) {
+    if (Array.isArray(firestoreLogs)) {
       return firestoreLogs;
     }
   } catch (error) {
@@ -705,7 +737,7 @@ async function loadMedicineLogsFromDataStore() {
 async function loadGeneralLogsFromDataStore() {
   try {
     const firestoreLogs = await fetchGeneralLogsFromFirestore();
-    if (Array.isArray(firestoreLogs) && firestoreLogs.length > 0) {
+    if (Array.isArray(firestoreLogs)) {
       return firestoreLogs;
     }
   } catch (error) {
@@ -2376,29 +2408,106 @@ function StudentDirectoryScreen({ navigation }) {
   const [selectedStudentId, setSelectedStudentId] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [isBackgroundUpdating, setIsBackgroundUpdating] = useState(false);
+  const [hasResolvedFirstLoad, setHasResolvedFirstLoad] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
 
-  const fetchStudents = useCallback(async () => {
-    try {
-      setLoading(true);
-      setErrorMessage('');
-      const data = await loadStudentsFromDataStore();
-      setStudents(Array.isArray(data) ? data : []);
-    } catch (error) {
-      setErrorMessage(error.message || 'Could not fetch students.');
-    } finally {
-      setLoading(false);
+  const refreshStudents = useCallback(async ({ fromPullToRefresh = false } = {}) => {
+    if (fromPullToRefresh) {
+      setRefreshing(true);
+    } else {
+      setIsBackgroundUpdating(true);
     }
-  }, []);
+
+    try {
+      setErrorMessage('');
+      const data = await fetchStudentsFromFirestore();
+      if (Array.isArray(data)) {
+        setStudents(data);
+        await saveStudentsToCache(accessProfile, data);
+      }
+    } catch (error) {
+      setErrorMessage(error.message || 'Could not refresh students right now.');
+    } finally {
+      if (fromPullToRefresh) {
+        setRefreshing(false);
+      } else {
+        setIsBackgroundUpdating(false);
+      }
+      if (!hasResolvedFirstLoad) {
+        setHasResolvedFirstLoad(true);
+        setLoading(false);
+      }
+    }
+  }, [accessProfile, hasResolvedFirstLoad]);
 
   useEffect(() => {
-    fetchStudents();
-  }, [fetchStudents]);
+    let isMounted = true;
+    let unsubscribeStudents = () => {};
+
+    const initStudents = async () => {
+      try {
+        const cached = await loadStudentsFromCache(accessProfile);
+        if (isMounted && Array.isArray(cached) && cached.length > 0) {
+          setStudents(cached);
+          setLoading(false);
+        }
+      } catch (_error) {
+        // Keep default loading state until realtime data resolves.
+      }
+
+      try {
+        unsubscribeStudents = subscribeStudentsFromFirestore(
+          async (nextStudents) => {
+            if (!isMounted) {
+              return;
+            }
+            setErrorMessage('');
+            setStudents(Array.isArray(nextStudents) ? nextStudents : []);
+            setHasResolvedFirstLoad(true);
+            setLoading(false);
+            setIsBackgroundUpdating(false);
+            await saveStudentsToCache(accessProfile, nextStudents);
+          },
+          async (error) => {
+            if (!isMounted) {
+              return;
+            }
+            setIsBackgroundUpdating(false);
+            setErrorMessage(error.message || 'Could not sync students in real time. Showing last saved data.');
+            if (!hasResolvedFirstLoad) {
+              const cached = await loadStudentsFromCache(accessProfile);
+              setStudents(Array.isArray(cached) ? cached : []);
+              setHasResolvedFirstLoad(true);
+              setLoading(false);
+            }
+          },
+        );
+      } catch (error) {
+        if (!isMounted) {
+          return;
+        }
+        setErrorMessage(error.message || 'Could not subscribe to student updates.');
+        const fallbackData = await loadStudentsFromDataStore();
+        setStudents(Array.isArray(fallbackData) ? fallbackData : []);
+        setHasResolvedFirstLoad(true);
+        setLoading(false);
+      }
+    };
+
+    initStudents();
+
+    return () => {
+      isMounted = false;
+      unsubscribeStudents();
+    };
+  }, [accessProfile, hasResolvedFirstLoad]);
 
   useFocusEffect(
     useCallback(() => {
-      fetchStudents();
-    }, [fetchStudents]),
+      refreshStudents();
+    }, [refreshStudents]),
   );
 
   const visibleStudentPool = useMemo(
@@ -2481,12 +2590,17 @@ function StudentDirectoryScreen({ navigation }) {
         />
 
         {loading ? <Text style={styles.statusText}>Loading students...</Text> : null}
+        {!loading && isBackgroundUpdating ? <Text style={styles.tapHint}>Updating...</Text> : null}
         {errorMessage ? <Text style={styles.errorText}>{errorMessage}</Text> : null}
         {!loading && !errorMessage && isParentAccount && visibleStudentPool.length === 0 ? (
           <Text style={styles.statusText}>No learner has been linked to this parent account yet. Ask the principal to open Staff Access and select the child for this parent.</Text>
         ) : null}
 
-          <ScrollView contentContainerStyle={styles.listContent} keyboardShouldPersistTaps="handled">
+          <ScrollView
+            contentContainerStyle={styles.listContent}
+            keyboardShouldPersistTaps="handled"
+            refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => refreshStudents({ fromPullToRefresh: true })} />}
+          >
             {!loading && !errorMessage && isParentAccount ? (
               orderedVisibleStudents.length === 0 ? (
                 <Text style={styles.statusText}>No linked learner found for this parent account.</Text>
@@ -3394,17 +3508,23 @@ function EmergencyProfileScreen({ route, navigation }) {
     `;
 
     try {
-      const file = await Print.printToFileAsync({ html });
-      const canShare = await Sharing.isAvailableAsync();
-
-      if (canShare) {
-        await Sharing.shareAsync(file.uri, {
-          mimeType: 'application/pdf',
-          dialogTitle: 'Export Learner History',
-          UTI: 'com.adobe.pdf',
-        });
+      if (Platform.OS === 'web') {
+        const printHtml = html.replace('</body>', '<script>window.print();<\/script></body>');
+        const blob = new Blob([printHtml], { type: 'text/html' });
+        const url = URL.createObjectURL(blob);
+        window.open(url, '_blank');
       } else {
-        await Linking.openURL(file.uri);
+        const file = await Print.printToFileAsync({ html });
+        const canShare = await Sharing.isAvailableAsync();
+        if (canShare) {
+          await Sharing.shareAsync(file.uri, {
+            mimeType: 'application/pdf',
+            dialogTitle: 'Export Learner History',
+            UTI: 'com.adobe.pdf',
+          });
+        } else {
+          await Linking.openURL(file.uri);
+        }
       }
     } catch (error) {
       Alert.alert('Export Failed', error.message || 'Could not export learner history.');
@@ -4037,7 +4157,7 @@ function EmergencyProfileScreen({ route, navigation }) {
 
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>Learner History</Text>
-          <Text style={styles.infoText}>Open a category to view that learner's detailed history without scrolling through every record on this page.</Text>
+          <Text style={styles.infoText}>{"Open a category to view that learner's detailed history without scrolling through every record on this page."}</Text>
           {[
             { key: 'attendance', label: `Attendance (${attendanceHistory.length})` },
             { key: 'incidents', label: `Incident (${incidentHistory.length})` },
@@ -5523,17 +5643,23 @@ function ActivitiesScreen({ navigation }) {
         </html>
       `;
 
-      const file = await Print.printToFileAsync({ html });
-      const canShare = await Sharing.isAvailableAsync();
-
-      if (canShare) {
-        await Sharing.shareAsync(file.uri, {
-          mimeType: 'application/pdf',
-          dialogTitle: 'Export Activities',
-          UTI: 'com.adobe.pdf',
-        });
+      if (Platform.OS === 'web') {
+        const printHtml = html.replace('</body>', '<script>window.print();<\/script></body>');
+        const blob = new Blob([printHtml], { type: 'text/html' });
+        const url = URL.createObjectURL(blob);
+        window.open(url, '_blank');
       } else {
-        await Linking.openURL(file.uri);
+        const file = await Print.printToFileAsync({ html });
+        const canShare = await Sharing.isAvailableAsync();
+        if (canShare) {
+          await Sharing.shareAsync(file.uri, {
+            mimeType: 'application/pdf',
+            dialogTitle: 'Export Activities',
+            UTI: 'com.adobe.pdf',
+          });
+        } else {
+          await Linking.openURL(file.uri);
+        }
       }
 
       setShowExportModal(false);
@@ -6673,17 +6799,23 @@ function ComplianceReportsScreen({ navigation }) {
         </html>
       `;
 
-      const file = await Print.printToFileAsync({ html });
-      const canShare = await Sharing.isAvailableAsync();
-
-      if (canShare) {
-        await Sharing.shareAsync(file.uri, {
-          mimeType: 'application/pdf',
-          dialogTitle: 'Export Compliance Report',
-          UTI: 'com.adobe.pdf',
-        });
+      if (Platform.OS === 'web') {
+        const printHtml = html.replace('</body>', '<script>window.print();<\/script></body>');
+        const blob = new Blob([printHtml], { type: 'text/html' });
+        const url = URL.createObjectURL(blob);
+        window.open(url, '_blank');
       } else {
-        await Linking.openURL(file.uri);
+        const file = await Print.printToFileAsync({ html });
+        const canShare = await Sharing.isAvailableAsync();
+        if (canShare) {
+          await Sharing.shareAsync(file.uri, {
+            mimeType: 'application/pdf',
+            dialogTitle: 'Export Compliance Report',
+            UTI: 'com.adobe.pdf',
+          });
+        } else {
+          await Linking.openURL(file.uri);
+        }
       }
     } catch (error) {
       Alert.alert('Export Failed', error.message || 'Could not generate compliance report.');

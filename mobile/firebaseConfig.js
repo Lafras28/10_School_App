@@ -661,6 +661,28 @@ export async function fetchStudentsFromFirestore() {
     .sort(compareStudentIds);
 }
 
+export function subscribeStudentsFromFirestore(onData, onError) {
+  if (typeof onData !== 'function') {
+    throw new Error('onData callback is required for students realtime subscription.');
+  }
+
+  const studentsRef = schoolCollectionRef(activeSchoolId, STUDENTS_COLLECTION);
+  return onSnapshot(
+    studentsRef,
+    (snapshot) => {
+      const nextStudents = snapshot.docs
+        .map((documentSnapshot) => normalizeStudent(documentSnapshot.data() || {}, documentSnapshot.id))
+        .sort(compareStudentIds);
+      onData(nextStudents);
+    },
+    (error) => {
+      if (typeof onError === 'function') {
+        onError(error);
+      }
+    },
+  );
+}
+
 export async function fetchAttendanceFromFirestore(registerDate) {
   const attendanceQuery = query(schoolCollectionRef(activeSchoolId, ATTENDANCE_COLLECTION), where('date', '==', String(registerDate || '').trim()));
   const snapshot = await getDocs(attendanceQuery);
