@@ -103,6 +103,30 @@ const FORM_PLACEHOLDER_COLOR = '#334E68';
 const TODAY = new Date().toISOString().split('T')[0];
 const DEFAULT_SCHOOL_NAME = 'Greenhill';
 const PARENT_ABSENT_REASON = 'Parent marked absent in app';
+const HISTORY_CACHE_KEY_PREFIX = 'schoolapp:history-cache:';
+
+function getHistoryCacheKey(studentId, historyType) {
+  return `${HISTORY_CACHE_KEY_PREFIX}${studentId}:${historyType}`;
+}
+
+async function loadHistoryFromCache(studentId, historyType) {
+  try {
+    const key = getHistoryCacheKey(studentId, historyType);
+    const raw = await AsyncStorage.getItem(key);
+    return raw ? JSON.parse(raw) : [];
+  } catch (_e) {
+    return [];
+  }
+}
+
+async function saveHistoryToCache(studentId, historyType, data) {
+  try {
+    const key = getHistoryCacheKey(studentId, historyType);
+    await AsyncStorage.setItem(key, JSON.stringify(Array.isArray(data) ? data : []));
+  } catch (_e) {
+    /* ignore */
+  }
+}
 const STUDENTS_CACHE_KEY_PREFIX = 'schoolapp:students-cache:';
 const SAVED_CREDENTIALS_KEY = 'schoolapp:saved-credentials';
 
@@ -3389,6 +3413,8 @@ function EmergencyProfileScreen({ route, navigation }) {
   const [pinInput, setPinInput] = useState('');
   const [pinError, setPinError] = useState('');
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyRefreshing, setHistoryRefreshing] = useState(false);
+  const [historyLoadError, setHistoryLoadError] = useState(null);
   const [parentAbsentSaving, setParentAbsentSaving] = useState(false);
   const [showParentAbsentDatePicker, setShowParentAbsentDatePicker] = useState(false);
   const [schoolMedicalVaultPassword, setSchoolMedicalVaultPassword] = useState('');
@@ -3653,6 +3679,52 @@ function EmergencyProfileScreen({ route, navigation }) {
     );
   };
 
+  const handleRefreshHistory = async () => {
+    if (!student?.id) return;
+    setHistoryRefreshing(true);
+    setHistoryLoadError(null);
+    try {
+      const normalizedStudentId = String(student.id || '').trim();
+      const [attendanceData, incidentData, medicineData, generalData] = await Promise.all([
+        loadAttendanceHistoryForStudentFromDataStore(normalizedStudentId),
+        loadIncidentsForStudentFromDataStore(normalizedStudentId),
+        loadMedicineLogsForStudentFromDataStore(normalizedStudentId),
+        loadGeneralLogsForStudentFromDataStore(normalizedStudentId),
+      ]);
+
+      const scopedAttendance = isParentAccount ? filterRecordsByAccess(attendanceData, accessProfile) : attendanceData;
+      const scopedIncidents = isParentAccount ? filterRecordsByAccess(incidentData, accessProfile) : incidentData;
+      const scopedMedicine = isParentAccount ? filterRecordsByAccess(medicineData, accessProfile) : medicineData;
+      const scopedGeneral = isParentAccount ? filterRecordsByAccess(generalData, accessProfile) : generalData;
+
+      const filteredAttendance = scopedAttendance.filter((entry) => {
+        const entryStatus = String(entry.status || '').trim();
+        return String(entry.studentId || '').trim() === normalizedStudentId && ['Absent', 'Late'].includes(entryStatus);
+      });
+      const filteredIncidents = scopedIncidents.filter((entry) => String(entry.studentId || '').trim() === normalizedStudentId);
+      const filteredMedicine = scopedMedicine.filter((entry) => String(entry.studentId || '').trim() === normalizedStudentId);
+      const filteredGeneral = scopedGeneral.filter((entry) => String(entry.studentId || '').trim() === normalizedStudentId);
+
+      await Promise.all([
+        saveHistoryToCache(normalizedStudentId, 'attendance', filteredAttendance),
+        saveHistoryToCache(normalizedStudentId, 'incidents', filteredIncidents),
+        saveHistoryToCache(normalizedStudentId, 'medicine', filteredMedicine),
+        saveHistoryToCache(normalizedStudentId, 'general', filteredGeneral),
+      ]);
+
+      setAttendanceHistory(filteredAttendance);
+      setIncidentHistory(filteredIncidents);
+      setMedicineHistory(filteredMedicine);
+      setGeneralHistory(filteredGeneral);
+      setHistoryLoadError(null);
+    } catch (error) {
+      console.warn('Could not refresh history.', error);
+      setHistoryLoadError(true);
+    } finally {
+      setHistoryRefreshing(false);
+    }
+  };
+
   const handleDeleteStudent = () => {
     if (!canEditStudents) {
       Alert.alert('Access Restricted', 'Only principal/admin users can remove learners.');
@@ -3780,54 +3852,92 @@ function EmergencyProfileScreen({ route, navigation }) {
   useEffect(() => {
     let isActive = true;
 
-    const loadParentHistory = async () => {
+    const loadParentHistory = async (isRefresh = false) => {
       if (!student?.id) {
         setAttendanceHistory([]);
         setIncidentHistory([]);
         setMedicineHistory([]);
         setGeneralHistory([]);
-        setHistoryLoading(false);
+        if (!isRefresh) setHistoryLoading(false);
+        if (isRefresh) setHistoryRefreshing(false);
         return;
       }
 
+      if (!isRefresh) setHistoryLoading(true);
+      if (isRefresh) setHistoryRefreshing(true);
+      setHistoryLoadError(null);
+
       try {
-        setHistoryLoading(true);
-        const [attendanceData, incidentData, medicineData, generalData] = await Promise.all([
-          loadAttendanceHistoryForStudentFromDataStore(student.id),
-          loadIncidentsForStudentFromDataStore(student.id),
-          loadMedicineLogsForStudentFromDataStore(student.id),
-          loadGeneralLogsForStudentFromDataStore(student.id),
+        const normalizedStudentId = String(student.id || '').trim();
+
+        // Load from cache first (optimistic)
+        const [cachedAttendance, cachedIncidents, cachedMedicine, cachedGeneral] = await Promise.all([
+          loadHistoryFromCache(normalizedStudentId, 'attendance'),
+          loadHistoryFromCache(normalizedStudentId, 'incidents'),
+          loadHistoryFromCache(normalizedStudentId, 'medicine'),
+          loadHistoryFromCache(normalizedStudentId, 'general'),
         ]);
 
-        if (!isActive) {
-          return;
+        if (isActive) {
+          setAttendanceHistory(cachedAttendance);
+          setIncidentHistory(cachedIncidents);
+          setMedicineHistory(cachedMedicine);
+          setGeneralHistory(cachedGeneral);
         }
 
-        const normalizedStudentId = String(student.id || '').trim();
+        // Fetch fresh data in background
+        const [attendanceData, incidentData, medicineData, generalData] = await Promise.all([
+          loadAttendanceHistoryForStudentFromDataStore(normalizedStudentId),
+          loadIncidentsForStudentFromDataStore(normalizedStudentId),
+          loadMedicineLogsForStudentFromDataStore(normalizedStudentId),
+          loadGeneralLogsForStudentFromDataStore(normalizedStudentId),
+        ]);
+
+        if (!isActive) return;
+
         const scopedAttendance = isParentAccount ? filterRecordsByAccess(attendanceData, accessProfile) : attendanceData;
         const scopedIncidents = isParentAccount ? filterRecordsByAccess(incidentData, accessProfile) : incidentData;
         const scopedMedicine = isParentAccount ? filterRecordsByAccess(medicineData, accessProfile) : medicineData;
         const scopedGeneral = isParentAccount ? filterRecordsByAccess(generalData, accessProfile) : generalData;
 
-        setAttendanceHistory(
-          scopedAttendance.filter((entry) => {
-            const entryStatus = String(entry.status || '').trim();
-            return String(entry.studentId || '').trim() === normalizedStudentId && ['Absent', 'Late'].includes(entryStatus);
-          }),
-        );
-        setIncidentHistory(scopedIncidents.filter((entry) => String(entry.studentId || '').trim() === normalizedStudentId));
-        setMedicineHistory(scopedMedicine.filter((entry) => String(entry.studentId || '').trim() === normalizedStudentId));
-        setGeneralHistory(scopedGeneral.filter((entry) => String(entry.studentId || '').trim() === normalizedStudentId));
+        const filteredAttendance = scopedAttendance.filter((entry) => {
+          const entryStatus = String(entry.status || '').trim();
+          return String(entry.studentId || '').trim() === normalizedStudentId && ['Absent', 'Late'].includes(entryStatus);
+        });
+        const filteredIncidents = scopedIncidents.filter((entry) => String(entry.studentId || '').trim() === normalizedStudentId);
+        const filteredMedicine = scopedMedicine.filter((entry) => String(entry.studentId || '').trim() === normalizedStudentId);
+        const filteredGeneral = scopedGeneral.filter((entry) => String(entry.studentId || '').trim() === normalizedStudentId);
+
+        // Cache the fresh data
+        await Promise.all([
+          saveHistoryToCache(normalizedStudentId, 'attendance', filteredAttendance),
+          saveHistoryToCache(normalizedStudentId, 'incidents', filteredIncidents),
+          saveHistoryToCache(normalizedStudentId, 'medicine', filteredMedicine),
+          saveHistoryToCache(normalizedStudentId, 'general', filteredGeneral),
+        ]);
+
+        // Update UI with fresh data
+        if (isActive) {
+          setAttendanceHistory(filteredAttendance);
+          setIncidentHistory(filteredIncidents);
+          setMedicineHistory(filteredMedicine);
+          setGeneralHistory(filteredGeneral);
+          setHistoryLoadError(null);
+        }
       } catch (error) {
         console.warn('Could not load parent history view.', error);
+        if (isActive) {
+          setHistoryLoadError(true);
+        }
       } finally {
         if (isActive) {
-          setHistoryLoading(false);
+          if (!isRefresh) setHistoryLoading(false);
+          if (isRefresh) setHistoryRefreshing(false);
         }
       }
     };
 
-    loadParentHistory();
+    loadParentHistory(false);
     return () => {
       isActive = false;
     };
@@ -4212,7 +4322,10 @@ function EmergencyProfileScreen({ route, navigation }) {
           title="Attendance History"
           emptyText="No late or absent records yet."
           loading={historyLoading}
+          refreshing={historyRefreshing}
+          hasError={historyLoadError}
           onClose={() => setActiveHistoryModal('')}
+          onRefresh={handleRefreshHistory}
         >
           {!historyLoading && attendanceHistory.length > 0 ? attendanceHistory.map((entry) => (
             <View key={entry.id} style={styles.timelineCard}>
@@ -4233,7 +4346,10 @@ function EmergencyProfileScreen({ route, navigation }) {
           title="Incident History"
           emptyText="No incident records yet."
           loading={historyLoading}
+          refreshing={historyRefreshing}
+          hasError={historyLoadError}
           onClose={() => setActiveHistoryModal('')}
+          onRefresh={handleRefreshHistory}
         >
           {!historyLoading && incidentHistory.length > 0 ? incidentHistory.map((entry) => (
             <View key={entry.id} style={styles.timelineCard}>
@@ -4256,7 +4372,10 @@ function EmergencyProfileScreen({ route, navigation }) {
           title="Medicine History"
           emptyText="No medicine entries yet."
           loading={historyLoading}
+          refreshing={historyRefreshing}
+          hasError={historyLoadError}
           onClose={() => setActiveHistoryModal('')}
+          onRefresh={handleRefreshHistory}
         >
           {!historyLoading && medicineHistory.length > 0 ? medicineHistory.map((entry) => (
             <View key={entry.id} style={styles.timelineCard}>
@@ -4279,7 +4398,10 @@ function EmergencyProfileScreen({ route, navigation }) {
           title="General Communication History"
           emptyText="No general communication entries yet."
           loading={historyLoading}
+          refreshing={historyRefreshing}
+          hasError={historyLoadError}
           onClose={() => setActiveHistoryModal('')}
+          onRefresh={handleRefreshHistory}
         >
           {!historyLoading && generalHistory.length > 0 ? generalHistory.map((entry) => (
             <View key={entry.id} style={styles.timelineCard}>
@@ -7027,19 +7149,40 @@ function CompactDatePickerColumn({ items, selectedValue, onSelect, label }) {
   );
 }
 
-function LearnerHistoryModal({ visible, title, emptyText, loading, onClose, children }) {
+function LearnerHistoryModal({ visible, title, emptyText, loading, refreshing, hasError, onClose, onRefresh, children }) {
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <View style={styles.modalBackdrop}>
         <TouchableOpacity style={styles.modalBackdropTouchable} activeOpacity={1} onPress={onClose} />
         <View style={styles.modalCard}>
           <Text style={styles.modalTitle}>{title}</Text>
+          {hasError ? (
+            <View style={{ backgroundColor: '#fff3cd', padding: 10, marginBottom: 10, borderRadius: 6 }}>
+              <Text style={{ color: '#856404', fontSize: 13, marginBottom: 6 }}>
+                No connection — showing cached data
+              </Text>
+              <TouchableOpacity
+                style={{ backgroundColor: '#856404', paddingVertical: 6, paddingHorizontal: 12, borderRadius: 4, alignSelf: 'flex-start' }}
+                onPress={onRefresh}
+                disabled={refreshing}
+              >
+                <Text style={{ color: '#fff', fontSize: 13, fontWeight: '600' }}>
+                  {refreshing ? 'Retrying...' : 'Retry'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          ) : null}
           <ScrollView
             style={styles.modalScrollContent}
             contentContainerStyle={styles.modalScrollContentInner}
             keyboardShouldPersistTaps="handled"
             nestedScrollEnabled
             showsVerticalScrollIndicator
+            refreshControl={
+              onRefresh ? (
+                <RefreshControl refreshing={refreshing || false} onRefresh={onRefresh} />
+              ) : undefined
+            }
           >
             {loading ? <Text style={styles.statusText}>Loading history...</Text> : null}
             {!loading && !children ? <Text style={styles.statusText}>{emptyText}</Text> : children}
@@ -7048,6 +7191,15 @@ function LearnerHistoryModal({ visible, title, emptyText, loading, onClose, chil
             <TouchableOpacity style={styles.modalButtonSecondary} onPress={onClose}>
               <Text style={styles.modalButtonSecondaryText}>Close</Text>
             </TouchableOpacity>
+            {onRefresh && !loading ? (
+              <TouchableOpacity
+                style={[styles.modalButtonPrimary, refreshing && styles.saveStudentButtonDisabled]}
+                onPress={onRefresh}
+                disabled={refreshing}
+              >
+                <Text style={styles.modalButtonPrimaryText}>{refreshing ? 'Refreshing...' : 'Refresh'}</Text>
+              </TouchableOpacity>
+            ) : null}
           </View>
         </View>
       </View>
