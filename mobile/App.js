@@ -214,6 +214,15 @@ function hasPermission(accessProfile, permission) {
   return Boolean(accessProfile?.permissions?.[permission]);
 }
 
+function showValidationAlert(title, message) {
+  if (Platform.OS === 'web' && typeof window !== 'undefined' && typeof window.alert === 'function') {
+    window.alert(`${title}\n\n${message}`);
+    return;
+  }
+
+  Alert.alert(title, message);
+}
+
 function isSchoolFeatureEnabled(accessProfile, featureKey) {
   const features = accessProfile?.schoolFeatures;
   if (!features || typeof features !== 'object') {
@@ -2952,12 +2961,12 @@ function StudentClassFolderScreen({ route, navigation }) {
 
   const handleSaveIncident = async () => {
     if (!incidentStudent) {
-      Alert.alert('Missing Details', 'Please select a learner before saving the incident.');
+      showValidationAlert('Missing Details', 'Please select a learner before saving the incident.');
       return;
     }
 
     if (!incidentLocation.trim() || !incidentDescription.trim() || !incidentActionTaken.trim() || !incidentWitness.trim()) {
-      Alert.alert('Missing Details', 'Please complete location, description, action taken, and witness.');
+      showValidationAlert('Missing Details', 'Please complete all incident fields.');
       return;
     }
 
@@ -3043,12 +3052,12 @@ function StudentClassFolderScreen({ route, navigation }) {
 
   const handleSaveMedicine = async () => {
     if (!medicineStudent) {
-      Alert.alert('Missing Details', 'Please select a learner and complete all medicine fields.');
+      showValidationAlert('Missing Details', 'Please select a learner and complete all medicine fields.');
       return;
     }
 
     if (!medicineName.trim() || !medicineDosage.trim() || !medicineStaffMember.trim()) {
-      Alert.alert('Missing Details', 'Please complete medication, dosage, and staff member.');
+      showValidationAlert('Missing Details', 'Please complete all medicine fields.');
       return;
     }
 
@@ -3089,12 +3098,12 @@ function StudentClassFolderScreen({ route, navigation }) {
 
   const handleSaveGeneral = async () => {
     if (!generalStudent) {
-      Alert.alert('Missing Details', 'Please select a learner and complete all general log fields.');
+      showValidationAlert('Missing Details', 'Please select a learner and complete all general log fields.');
       return;
     }
 
     if (!generalSubject.trim() || !generalNote.trim() || !generalStaffMember.trim()) {
-      Alert.alert('Missing Details', 'Please complete subject, note, and staff member.');
+      showValidationAlert('Missing Details', 'Please complete all general communication fields.');
       return;
     }
 
