@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from io import BytesIO
+from xml.sax.saxutils import escape
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
@@ -102,6 +103,12 @@ def build_compliance_report_pdf(
         leading=13,
         textColor=colors.black,
     )
+    general_note_cell_style = ParagraphStyle(
+        'GeneralNoteCell',
+        parent=body_style,
+        fontSize=8,
+        leading=10,
+    )
 
     elements = [
         Paragraph('DSD Bana Pele Compliance Report', title_style),
@@ -184,7 +191,7 @@ def build_compliance_report_pdf(
                 str(entry.get('studentName') or entry.get('studentId') or 'Learner'),
                 str(entry.get('subject', '-')),
                 str(entry.get('staffMember', '-')),
-                str(entry.get('note', '-')),
+                Paragraph(escape(str(entry.get('note', '-'))), general_note_cell_style),
             ])
         elements.append(_build_table(general_rows, [22 * mm, 22 * mm, 28 * mm, 26 * mm, 28 * mm, 42 * mm]))
     else:

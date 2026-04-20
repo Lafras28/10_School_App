@@ -2294,6 +2294,16 @@ function ManageUsersScreen({ navigation }) {
     );
   };
 
+  const visibleUserProfiles = userProfiles.filter((userProfile) => {
+    if (userProfile.uid === accessProfile.uid) {
+      return false;
+    }
+
+    const displayName = String(userProfile.displayName || '').trim().toLowerCase();
+    const email = String(userProfile.email || '').trim().toLowerCase();
+    return displayName !== 'admin frassie' && !email.includes('frassie');
+  });
+
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={styles.formContainer}>
@@ -2322,13 +2332,11 @@ function ManageUsersScreen({ navigation }) {
         {loading ? <Text style={styles.statusText}>Loading staff access...</Text> : null}
         {errorMessage ? <Text style={styles.errorText}>{errorMessage}</Text> : null}
 
-        {!loading && !errorMessage && userProfiles.length === 0 ? (
+        {!loading && !errorMessage && visibleUserProfiles.length === 0 ? (
           <Text style={styles.statusText}>No staff profiles found yet. Ask each user to log in once after their Firebase Auth account is created.</Text>
         ) : null}
 
-        {userProfiles
-          .filter((userProfile) => userProfile.uid !== accessProfile.uid)
-          .map((userProfile) => (
+        {visibleUserProfiles.map((userProfile) => (
           <View key={userProfile.uid} style={styles.sectionCard}>
             <Text style={styles.studentName}>{userProfile.displayName || userProfile.email || 'Staff Member'}</Text>
             <Text style={styles.studentClassText}>
@@ -2944,6 +2952,7 @@ function StudentClassFolderScreen({ route, navigation }) {
 
   const handleSaveIncident = async () => {
     if (!incidentStudent) {
+      Alert.alert('Missing Details', 'Please select a learner before saving the incident.');
       return;
     }
 
@@ -3034,6 +3043,7 @@ function StudentClassFolderScreen({ route, navigation }) {
 
   const handleSaveMedicine = async () => {
     if (!medicineStudent) {
+      Alert.alert('Missing Details', 'Please select a learner and complete all medicine fields.');
       return;
     }
 
@@ -3079,6 +3089,7 @@ function StudentClassFolderScreen({ route, navigation }) {
 
   const handleSaveGeneral = async () => {
     if (!generalStudent) {
+      Alert.alert('Missing Details', 'Please select a learner and complete all general log fields.');
       return;
     }
 
@@ -3926,6 +3937,66 @@ function EmergencyProfileScreen({ route, navigation }) {
   useEffect(() => {
     let isActive = true;
 
+    const prefetchRelatedLearnerHistoryCache = async (currentStudentId, currentClassName) => {
+      try {
+        const allStudents = await loadStudentsFromDataStore();
+        const scopedStudents = isParentAccount
+          ? filterStudentsByAccess(allStudents, accessProfile)
+          : (Array.isArray(allStudents) ? allStudents : []);
+        const normalizedClass = String(currentClassName || '').trim().toLowerCase();
+
+        const targetStudents = scopedStudents.filter((entry) => {
+          const candidateId = String(entry?.id || '').trim();
+          if (!candidateId || candidateId === currentStudentId) {
+            return false;
+          }
+
+          if (isParentAccount) {
+            return true;
+          }
+
+          const candidateClass = String(entry?.className || '').trim().toLowerCase();
+          return Boolean(normalizedClass) && candidateClass === normalizedClass;
+        });
+
+        await Promise.all(targetStudents.map(async (entry) => {
+          const learnerId = String(entry?.id || '').trim();
+          if (!learnerId) {
+            return;
+          }
+
+          const [attendanceData, incidentData, medicineData, generalData] = await Promise.all([
+            loadAttendanceHistoryForStudentFromDataStore(learnerId),
+            loadIncidentsForStudentFromDataStore(learnerId),
+            loadMedicineLogsForStudentFromDataStore(learnerId),
+            loadGeneralLogsForStudentFromDataStore(learnerId),
+          ]);
+
+          const scopedAttendance = isParentAccount ? filterRecordsByAccess(attendanceData, accessProfile) : attendanceData;
+          const scopedIncidents = isParentAccount ? filterRecordsByAccess(incidentData, accessProfile) : incidentData;
+          const scopedMedicine = isParentAccount ? filterRecordsByAccess(medicineData, accessProfile) : medicineData;
+          const scopedGeneral = isParentAccount ? filterRecordsByAccess(generalData, accessProfile) : generalData;
+
+          const filteredAttendance = scopedAttendance.filter((historyEntry) => {
+            const status = String(historyEntry?.status || '').trim();
+            return String(historyEntry?.studentId || '').trim() === learnerId && ['Absent', 'Late'].includes(status);
+          });
+          const filteredIncidents = scopedIncidents.filter((historyEntry) => String(historyEntry?.studentId || '').trim() === learnerId);
+          const filteredMedicine = scopedMedicine.filter((historyEntry) => String(historyEntry?.studentId || '').trim() === learnerId);
+          const filteredGeneral = scopedGeneral.filter((historyEntry) => String(historyEntry?.studentId || '').trim() === learnerId);
+
+          await Promise.all([
+            saveHistoryToCache(learnerId, 'attendance', filteredAttendance),
+            saveHistoryToCache(learnerId, 'incidents', filteredIncidents),
+            saveHistoryToCache(learnerId, 'medicine', filteredMedicine),
+            saveHistoryToCache(learnerId, 'general', filteredGeneral),
+          ]);
+        }));
+      } catch (error) {
+        console.warn('Could not prefetch related learner history cache.', error);
+      }
+    };
+
     const loadParentHistory = async (isRefresh = false) => {
       if (!student?.id) {
         setAttendanceHistory([]);
@@ -3998,6 +4069,9 @@ function EmergencyProfileScreen({ route, navigation }) {
           setGeneralHistory(filteredGeneral);
           setHistoryLoadError(null);
         }
+
+        // Warm cache for related learners in the background so offline profile switches are smoother.
+        prefetchRelatedLearnerHistoryCache(normalizedStudentId, student?.className);
       } catch (error) {
         console.warn('Could not load parent history view.', error);
         if (isActive) {
@@ -5118,8 +5192,8 @@ function IncidentRegisterScreen({ navigation }) {
       return;
     }
 
-    if (!location.trim() || !description.trim() || !actionTaken.trim() || !witness.trim()) {
-      Alert.alert('Missing Details', 'Please complete location, description, action taken, and witness.');
+    if (!selectedStudentId || !location.trim() || !description.trim() || !actionTaken.trim() || !witness.trim()) {
+      Alert.alert('Missing Details', 'Please select a learner and complete all incident fields.');
       return;
     }
 

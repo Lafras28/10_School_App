@@ -36,6 +36,7 @@ const GENERAL_LOGS_COLLECTION = 'general_logs';
 const COMPLIANCE_DOCS_COLLECTION = 'compliance_documents';
 const ACTIVITIES_COLLECTION = 'activities';
 const PRINCIPAL_EMAILS = new Set(['fritzlafras@gmail.com', 'principal@school.com']);
+const AUTH_BOOTSTRAP_TIMEOUT_MS = 4500;
 
 function getCurrentLocalDateString() {
   const now = new Date();
@@ -312,8 +313,17 @@ export function listenToAuthChanges(callback) {
       return;
     }
 
+    const fallbackProfile = buildAccessProfile(user);
+    let timeoutTriggered = false;
+    const authBootstrapTimer = setTimeout(() => {
+      timeoutTriggered = true;
+      activeSchoolId = fallbackProfile.schoolId;
+      callback(user, fallbackProfile);
+    }, AUTH_BOOTSTRAP_TIMEOUT_MS);
+
     try {
       const accessProfile = await ensureUserAccessProfile(user);
+      clearTimeout(authBootstrapTimer);
       if (accessProfile?.isActive === false) {
         await signOut(auth);
         callback(null, null);
@@ -342,8 +352,11 @@ export function listenToAuthChanges(callback) {
         console.warn('Could not subscribe to user access profile.', error);
       });
     } catch (error) {
+      clearTimeout(authBootstrapTimer);
       console.warn('Could not load user access profile.', error);
-      callback(user, buildAccessProfile(user));
+      if (!timeoutTriggered) {
+        callback(user, fallbackProfile);
+      }
     }
   });
 
