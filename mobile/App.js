@@ -3051,9 +3051,19 @@ function StudentClassFolderScreen({ route, navigation }) {
   };
 
   const confirmCancelLogModal = (closeModal) => {
+    const promptMessage = 'Are you sure you want to cancel? Your unsaved changes will be lost.';
+
+    if (Platform.OS === 'web') {
+      const shouldCancel = typeof window !== 'undefined' ? window.confirm(promptMessage) : true;
+      if (shouldCancel) {
+        closeModal();
+      }
+      return;
+    }
+
     Alert.alert(
       'Cancel Entry?',
-      'Are you sure you want to cancel? Your unsaved changes will be lost.',
+      promptMessage,
       [
         { text: 'Keep Editing', style: 'cancel' },
         { text: 'Yes, Cancel', style: 'destructive', onPress: closeModal },
