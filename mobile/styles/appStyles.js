@@ -527,6 +527,9 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
     gap: 12,
   },
+  modalButtonsRowSeparated: {
+    justifyContent: 'space-between',
+  },
   modalButtonSecondary: {
     backgroundColor: '#FFFFFF',
     borderRadius: 6,

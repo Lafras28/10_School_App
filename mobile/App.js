@@ -3050,6 +3050,21 @@ function StudentClassFolderScreen({ route, navigation }) {
     setShowGeneralOccurredDatePicker(false);
   };
 
+  const confirmCancelLogModal = (closeModal) => {
+    Alert.alert(
+      'Cancel Entry?',
+      'Are you sure you want to cancel? Your unsaved changes will be lost.',
+      [
+        { text: 'Keep Editing', style: 'cancel' },
+        { text: 'Yes, Cancel', style: 'destructive', onPress: closeModal },
+      ],
+    );
+  };
+
+  const requestCloseIncidentModal = () => confirmCancelLogModal(closeIncidentModal);
+  const requestCloseMedicineModal = () => confirmCancelLogModal(closeMedicineModal);
+  const requestCloseGeneralModal = () => confirmCancelLogModal(closeGeneralModal);
+
   const handleSaveMedicine = async () => {
     if (!medicineStudent) {
       showValidationAlert('Missing Details', 'Please select a learner and complete all medicine fields.');
@@ -3292,8 +3307,8 @@ function StudentClassFolderScreen({ route, navigation }) {
                   onChangeText={setIncidentWitness}
                 />
 
-                <View style={styles.modalButtonsRow}>
-                  <TouchableOpacity style={styles.modalButtonSecondary} onPress={closeIncidentModal}>
+                <View style={[styles.modalButtonsRow, styles.modalButtonsRowSeparated]}>
+                  <TouchableOpacity style={styles.modalButtonSecondary} onPress={requestCloseIncidentModal}>
                     <Text style={styles.modalButtonSecondaryText}>Cancel</Text>
                   </TouchableOpacity>
                   <TouchableOpacity
@@ -3379,8 +3394,8 @@ function StudentClassFolderScreen({ route, navigation }) {
                   onChangeText={setMedicineStaffMember}
                 />
 
-                <View style={styles.modalButtonsRow}>
-                  <TouchableOpacity style={styles.modalButtonSecondary} onPress={closeMedicineModal}>
+                <View style={[styles.modalButtonsRow, styles.modalButtonsRowSeparated]}>
+                  <TouchableOpacity style={styles.modalButtonSecondary} onPress={requestCloseMedicineModal}>
                     <Text style={styles.modalButtonSecondaryText}>Cancel</Text>
                   </TouchableOpacity>
                   <TouchableOpacity
@@ -3461,8 +3476,8 @@ function StudentClassFolderScreen({ route, navigation }) {
                   onChangeText={setGeneralStaffMember}
                 />
 
-                <View style={styles.modalButtonsRow}>
-                  <TouchableOpacity style={styles.modalButtonSecondary} onPress={closeGeneralModal}>
+                <View style={[styles.modalButtonsRow, styles.modalButtonsRowSeparated]}>
+                  <TouchableOpacity style={styles.modalButtonSecondary} onPress={requestCloseGeneralModal}>
                     <Text style={styles.modalButtonSecondaryText}>Cancel</Text>
                   </TouchableOpacity>
                   <TouchableOpacity
