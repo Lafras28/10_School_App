@@ -12,9 +12,11 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 
 from attendance_register import get_daily_register, list_attendance_entries_for_range, update_attendance_entry
+from bottle_log import create_bottle_log_record, list_bottle_logs
 from general_log import create_general_log_record, list_general_logs
 from incident_register import create_incident_record, list_incidents
 from medicine_log import create_medicine_record, list_medicine_logs
+from nappy_log import create_nappy_log_record, list_nappy_logs
 from pdf_export import build_compliance_report_pdf
 
 app = Flask(__name__)
@@ -502,6 +504,54 @@ def create_medicine_entry():
         'message': 'Medicine administration logged.',
         'entry': entry,
         'warning': 'WARNING: Medication matches a recorded allergy.' if entry.get('allergyWarning') else '',
+    }), 201
+
+
+@app.get('/bottles')
+def list_bottle_entries():
+    return jsonify(list_bottle_logs()), 200
+
+
+@app.post('/bottles')
+def create_bottle_entry():
+    payload = request.get_json(silent=True) or {}
+    student_id = str(payload.get('studentId') or '').strip()
+    student = get_student_by_id(student_id)
+    if student is None:
+        return jsonify({'error': 'Student not found.'}), 404
+
+    try:
+        entry = create_bottle_log_record(payload, student)
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+
+    return jsonify({
+        'message': 'Bottle logged.',
+        'entry': entry,
+    }), 201
+
+
+@app.get('/nappies')
+def list_nappy_entries():
+    return jsonify(list_nappy_logs()), 200
+
+
+@app.post('/nappies')
+def create_nappy_entry():
+    payload = request.get_json(silent=True) or {}
+    student_id = str(payload.get('studentId') or '').strip()
+    student = get_student_by_id(student_id)
+    if student is None:
+        return jsonify({'error': 'Student not found.'}), 404
+
+    try:
+        entry = create_nappy_log_record(payload, student)
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+
+    return jsonify({
+        'message': 'Nappy logged.',
+        'entry': entry,
     }), 201
 
 

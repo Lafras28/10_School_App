@@ -11,6 +11,7 @@
 
 import path from 'node:path';
 import process from 'node:process';
+import { fileURLToPath } from 'node:url';
 import ExcelJS from 'exceljs';
 
 // ─── Colours ──────────────────────────────────────────────────────────────────
@@ -185,6 +186,7 @@ function buildStudentsSheet(wb) {
     { key: 'ec1Email',          width: 30 },
     { key: 'ec2Name',           width: 24 },
     { key: 'ec2Number',         width: 18 },
+    { key: 'ec2Email',          width: 30 },
     { key: 'ec3Name',           width: 24 },
     { key: 'ec3Number',         width: 18 },
     { key: 'ec4Name',           width: 24 },
@@ -198,21 +200,21 @@ function buildStudentsSheet(wb) {
     { key: 'doctorContact',     width: 22 },
   ];
 
-  titleRow(ws, '  STUDENTS / LEARNERS', 21, C.gold);
-  noteRow(ws, '  Add one row per learner. Class Name must match exactly what is written on the Staff sheet.', 21, C.lightBlue);
-  noteRow(ws, '  Child ID can be provided for your internal reference. Emergency Contact 1 (name + number) is required. You can add up to 4 emergency contacts per learner. EC1 email and medical aid fields are optional unless your process requires them.', 21, C.lightAmber);
+  titleRow(ws, '  STUDENTS / LEARNERS', 22, C.gold);
+  noteRow(ws, '  Add one row per learner. Class Name must match exactly what is written on the Staff sheet.', 22, C.lightBlue);
+  noteRow(ws, '  Child ID can be provided for your internal reference. Emergency Contact 1 (name + number) is required. You can add up to 4 emergency contacts per learner. EC1/EC2 email and medical aid fields are optional unless your process requires them.', 22, C.lightAmber);
   ws.addRow([]);
 
   headerRow(ws, [
     'Child ID', '* First Name', '* Last Name', '* Class Name', 'Allergies',
-    '* EC1 Name', '* EC1 Number', 'EC1 Email', 'EC2 Name', 'EC2 Number', 'EC3 Name', 'EC3 Number', 'EC4 Name', 'EC4 Number',
+    '* EC1 Name', '* EC1 Number', 'EC1 Email', 'EC2 Name', 'EC2 Number', 'EC2 Email', 'EC3 Name', 'EC3 Number', 'EC4 Name', 'EC4 Number',
     'Medical Aid Name', 'Medical Aid Plan', 'Medical Aid No.', 'Main Member Name', 'Main Member ID No.', 'Child Dependency Code', 'Doctor Contact',
   ], C.gold, C.navy);
 
   const examples = [
-    ['CH-001', 'Liam',   'Smith',    'Sunshine Bunnies', 'Peanuts',            'Sarah Smith', '+27821234001', 'sarah@example.com', '', '', '', '', '', '', 'Discovery', 'Classic Smart', 'D12345', 'Sarah Smith', '8201015009087', '01', 'Dr Patel +27112223333'],
-    ['CH-002', 'Emma',   'Johnson',  'Sunshine Bunnies', 'No known allergies', 'Tom Johnson', '+27821234002', '',                  '', '', '', '', '', '', '',          '',              '',       '',             '',              '',   ''],
-    ['CH-003', 'Sophia', 'Wilson',   'Rainbow Cubs',     'Dairy',              'Mark Wilson', '+27821234006', 'mark@example.com',  'Ann Wilson', '+27821234099', 'Jane Wilson', '+27825551111', 'Luke Wilson', '+27825552222', 'Bonitas', 'BonComprehensive', 'B77891', 'Mark Wilson', '7902125101088', '02', ''],
+    ['CH-001', 'Liam',   'Smith',    'Sunshine Bunnies', 'Peanuts',            'Sarah Smith', '+27821234001', 'sarah@example.com', '', '', '', '', '', '', '', 'Discovery', 'Classic Smart', 'D12345', 'Sarah Smith', '8201015009087', '01', 'Dr Patel +27112223333'],
+    ['CH-002', 'Emma',   'Johnson',  'Sunshine Bunnies', 'No known allergies', 'Tom Johnson', '+27821234002', '',                  '', '', '', '', '', '', '', '',          '',              '',       '',             '',              '',   ''],
+    ['CH-003', 'Sophia', 'Wilson',   'Rainbow Cubs',     'Dairy',              'Mark Wilson', '+27821234006', 'mark@example.com',  'Ann Wilson', '+27821234099', 'ann@example.com', 'Jane Wilson', '+27825551111', 'Luke Wilson', '+27825552222', 'Bonitas', 'BonComprehensive', 'B77891', 'Mark Wilson', '7902125101088', '02', ''],
   ];
   examples.forEach((r, i) => {
     dataRow(ws, r, i % 2 === 0 ? C.lightGrey : { argb: 'FFFFFFFF' });
@@ -220,7 +222,7 @@ function buildStudentsSheet(wb) {
 
   // 30 blank input rows
   for (let i = 0; i < 30; i += 1) {
-    dataRow(ws, new Array(21).fill(''), { argb: 'FFFFFFFF' });
+    dataRow(ws, new Array(22).fill(''), { argb: 'FFFFFFFF' });
   }
 }
 
@@ -276,9 +278,10 @@ function buildInstructionsSheet(wb) {
 // ─── Entry Point ──────────────────────────────────────────────────────────────
 async function main() {
   const { out } = parseArgs(process.argv);
+  const scriptDir = path.dirname(fileURLToPath(import.meta.url));
   const outPath = out
     ? path.resolve(out)
-    : path.resolve('..', 'SchoolOnboardingTemplate.xlsx');
+    : path.resolve(scriptDir, '..', '..', 'SchoolOnboardingTemplate.xlsx');
 
   const wb = new ExcelJS.Workbook();
   wb.creator  = 'School Safety App';

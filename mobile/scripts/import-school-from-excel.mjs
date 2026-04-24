@@ -37,11 +37,16 @@ const VIEWER_PERMISSIONS = {
   canTakeAttendance: false, canLogIncidents: false,
   canLogMedicine: false, canExportReports: false, canManageUsers: false,
 };
+const PARENT_PERMISSIONS = {
+  canEditStudents: false, canEditOwnChildMedicalInfo: true,
+  canTakeAttendance: false, canLogIncidents: false,
+  canLogMedicine: false, canExportReports: false, canManageUsers: false,
+};
 const ROLE_PERMISSIONS = {
   principal: PRINCIPAL_PERMISSIONS,
   teacher:   TEACHER_PERMISSIONS,
   viewer:    VIEWER_PERMISSIONS,
-  parent:    VIEWER_PERMISSIONS,
+  parent:    PARENT_PERMISSIONS,
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -118,6 +123,23 @@ function normalizePhoneNumber(raw) {
 function normalizeId(val, fallback = 'school') {
   const slug = String(val || '').trim().toLowerCase().replace(/[^a-z0-9-_]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
   return slug || fallback;
+}
+
+function normalizeEmail(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function buildParentDisplayName(name, email) {
+  const normalizedName = String(name || '').trim();
+  if (normalizedName) return normalizedName;
+
+  const emailText = normalizeEmail(email);
+  const localPart = emailText.split('@')[0] || 'Parent';
+  return localPart
+    .replace(/[._-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\b\w/g, (char) => char.toUpperCase()) || 'Parent';
 }
 
 function padNum(n) { return String(n).padStart(3, '0'); }
@@ -256,6 +278,7 @@ function readStudents(wb) {
     const ec1Email            = valueByHeader(row, 'EC1 Email');
     const ec2Name             = valueByHeader(row, 'EC2 Name');
     const ec2Number           = normalizePhoneNumber(valueByHeader(row, 'EC2 Number'));
+    const ec2Email            = valueByHeader(row, 'EC2 Email', 'EM2 Email');
     const ec3Name             = valueByHeader(row, 'EC3 Name');
     const ec3Number           = normalizePhoneNumber(valueByHeader(row, 'EC3 Number'));
     const ec4Name             = valueByHeader(row, 'EC4 Name');
@@ -276,7 +299,7 @@ function readStudents(wb) {
     if (ec1Name || ec1Number || ec1Email) {
       emergencyContacts.push({ name: ec1Name || 'Contact 1', number: ec1Number || '', email: ec1Email || '' });
     }
-    if (ec2Name || ec2Number) emergencyContacts.push({ name: ec2Name || 'Contact 2', number: ec2Number || '' });
+    if (ec2Name || ec2Number || ec2Email) emergencyContacts.push({ name: ec2Name || 'Contact 2', number: ec2Number || '', email: ec2Email || '' });
     if (ec3Name || ec3Number) emergencyContacts.push({ name: ec3Name || 'Contact 3', number: ec3Number || '' });
     if (ec4Name || ec4Number) emergencyContacts.push({ name: ec4Name || 'Contact 4', number: ec4Number || '' });
 
@@ -286,6 +309,8 @@ function readStudents(wb) {
       lastName,
       className,
       allergies,
+      ec1Email,
+      ec2Email,
       emergencyContacts,
       medicalAidName,
       medicalAidPlan,
@@ -339,6 +364,7 @@ async function main() {
   const auth = getAuth();
 
   const writes = [];
+  const parentLinksByEmail = new Map();
 
   // School doc
   const schoolRef = db.collection(SCHOOLS_COL).doc(schoolInfo.id);
@@ -433,6 +459,8 @@ async function main() {
         firstName:        student.firstName,
         lastName:         student.lastName,
         className:        student.className,
+        ec1Email:         String(student.ec1Email || '').trim(),
+        ec2Email:         String(student.ec2Email || '').trim(),
         emergencyContacts: student.emergencyContacts,
         allergies:        student.allergies,
         medicalAidName:   student.medicalAidName,
@@ -444,8 +472,65 @@ async function main() {
         doctorContact:    student.doctorContact,
       },
     });
+
+    const pushParentLink = (contact = {}, fallbackName = 'Parent') => {
+      const email = normalizeEmail(contact?.email || '');
+      if (!email) return;
+
+      const current = parentLinksByEmail.get(email) || {
+        displayName: buildParentDisplayName(contact?.name, email) || fallbackName,
+        linkedStudentIds: new Set(),
+        childIds: new Set(),
+      };
+      current.linkedStudentIds.add(sid);
+
+      const normalizedChildId = String(student.childId || '').trim();
+      if (normalizedChildId) {
+        current.childIds.add(normalizedChildId);
+      }
+
+      if (!current.displayName || current.displayName === 'Parent') {
+        current.displayName = buildParentDisplayName(contact?.name, email);
+      }
+
+      parentLinksByEmail.set(email, current);
+    };
+
+    pushParentLink(student?.emergencyContacts?.[0], 'Parent Contact 1');
+    pushParentLink(student?.emergencyContacts?.[1], 'Parent Contact 2');
+
     console.log(`  Queued: ${student.firstName} ${student.lastName} (${sid}) → ${student.className}`);
   });
+
+  for (const [email, parentInfo] of parentLinksByEmail.entries()) {
+    const linkedStudentIds = Array.from(parentInfo.linkedStudentIds);
+    const childIds = Array.from(parentInfo.childIds);
+    const initialPassword = String(childIds[0] || '').trim() || '123456';
+
+    if (childIds.length > 1) {
+      console.warn(`  Parent ${email} linked to multiple Child IDs (${childIds.join(', ')}). Using first Child ID as initial password.`);
+    }
+
+    const parentUid = await upsertAuthUser(auth, email, initialPassword, parentInfo.displayName || 'Parent', dryRun);
+    writes.push({
+      ref: db.collection(USERS_COL).doc(parentUid),
+      data: {
+        uid: parentUid,
+        email,
+        displayName: parentInfo.displayName || 'Parent',
+        schoolId: schoolInfo.id,
+        schoolFeatures: schoolInfo.features,
+        role: 'parent',
+        permissions: ROLE_PERMISSIONS.parent,
+        linkedStudentIds,
+        mustResetPassword: true,
+        requiresPasswordReset: true,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      },
+    });
+    console.log(`  Parent access: ${email} linked to ${linkedStudentIds.length} learner(s)`);
+  }
 
   await batchWrite(db, writes, dryRun);
 

@@ -31,6 +31,8 @@ import {
   fetchAllAttendanceFromFirestore,
   fetchActivitiesFromFirestore,
   fetchAttendanceFromFirestore,
+  fetchBottleLogsForStudentFromFirestore,
+  fetchBottleLogsFromFirestore,
   fetchComplianceDocuments,
   fetchGeneralLogsFromFirestore,
   fetchGeneralLogsForStudentFromFirestore,
@@ -38,35 +40,44 @@ import {
   fetchIncidentsFromFirestore,
   fetchMedicineLogsForStudentFromFirestore,
   fetchMedicineLogsFromFirestore,
+  fetchNappyLogsForStudentFromFirestore,
+  fetchNappyLogsFromFirestore,
   fetchStudentsFromFirestore,
   fetchUserAccessProfiles,
   listenToAuthChanges,
   saveAttendanceToFirestore,
   saveActivityToFirestore,
+  saveBottleLogToFirestore,
   updateActivityInFirestore,
   saveComplianceDocument,
   saveGeneralLogToFirestore,
   saveIncidentToFirestore,
   saveMedicineLogToFirestore,
+  saveNappyLogToFirestore,
   saveStudentToFirestore,
   subscribeStudentsFromFirestore,
   seedAttendanceToFirestore,
+  seedBottleLogsToFirestore,
   seedGeneralLogsToFirestore,
   seedIncidentsToFirestore,
   seedMedicineLogsToFirestore,
+  seedNappyLogsToFirestore,
   seedStudentsToFirestore,
   signInUser,
   signOutCurrentUser,
   sendResetPasswordEmail,
   getCurrentSchoolConfig,
   updateCurrentUserCredentials,
+  verifyCurrentUserPassword,
   updateCurrentSchoolFeatures,
   updateCurrentSchoolEditDataPassword,
   updateCurrentSchoolMedicalVaultPassword,
   updateAttendanceEntryInFirestore,
+  updateBottleLogInFirestore,
   updateGeneralLogInFirestore,
   updateIncidentInFirestore,
   updateMedicineLogInFirestore,
+  updateNappyLogInFirestore,
   updateUserAccessProfile,
 } from './firebaseConfig';
 import styles from './styles/appStyles';
@@ -204,6 +215,7 @@ const AccessContext = createContext({
   role: 'teacher',
   permissions: DEFAULT_ROLE_PERMISSIONS.teacher,
   linkedStudentIds: [],
+  requiresPasswordReset: false,
 });
 
 function useAccessProfile() {
@@ -371,6 +383,88 @@ function getStudentFullName(student) {
 function getClassroomName(student) {
   const className = String(student?.className || '').trim();
   return className || 'Sunshine Bunnies';
+}
+
+function parseChildBirthDateFromId(childIdValue) {
+  const raw = String(childIdValue || '').trim();
+  if (!raw) return null;
+
+  const dotted = raw.match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
+  if (dotted) {
+    const [, day, month, year] = dotted;
+    const date = new Date(Number(year), Number(month) - 1, Number(day));
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+
+  const iso = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (iso) {
+    const [, year, month, day] = iso;
+    const date = new Date(Number(year), Number(month) - 1, Number(day));
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+
+  const digits = raw.replace(/\D+/g, '');
+  if (digits.length < 6) return null;
+
+  const yy = Number(digits.slice(0, 2));
+  const mm = Number(digits.slice(2, 4));
+  const dd = Number(digits.slice(4, 6));
+  if (Number.isNaN(yy) || Number.isNaN(mm) || Number.isNaN(dd) || mm < 1 || mm > 12 || dd < 1 || dd > 31) {
+    return null;
+  }
+
+  const now = new Date();
+  const candidate2000 = new Date(2000 + yy, mm - 1, dd);
+  const candidate1900 = new Date(1900 + yy, mm - 1, dd);
+  const isValid2000 = !Number.isNaN(candidate2000.getTime()) && candidate2000 <= now;
+  const isValid1900 = !Number.isNaN(candidate1900.getTime()) && candidate1900 <= now;
+
+  if (isValid2000) return candidate2000;
+  if (isValid1900) return candidate1900;
+  return null;
+}
+
+function getLearnerAgeYearsFromChildId(student) {
+  const birthDate = parseChildBirthDateFromId(student?.childId);
+  if (!birthDate) return null;
+
+  const today = new Date();
+  let age = today.getFullYear() - birthDate.getFullYear();
+  const monthDiff = today.getMonth() - birthDate.getMonth();
+  const dayDiff = today.getDate() - birthDate.getDate();
+  if (monthDiff < 0 || (monthDiff === 0 && dayDiff < 0)) {
+    age -= 1;
+  }
+  return age;
+}
+
+function getLearnerAgeMonthsFromChildId(student) {
+  const birthDate = parseChildBirthDateFromId(student?.childId);
+  if (!birthDate) return null;
+
+  const today = new Date();
+  let months = (today.getFullYear() - birthDate.getFullYear()) * 12;
+  months += today.getMonth() - birthDate.getMonth();
+  if (today.getDate() < birthDate.getDate()) {
+    months -= 1;
+  }
+  return months;
+}
+
+function shouldShowNappy(student) {
+  const ageYears = getLearnerAgeYearsFromChildId(student);
+  if (ageYears === null) {
+    return true;
+  }
+  return ageYears < 3;
+}
+
+function shouldShowBottle(student) {
+  const ageMonths = getLearnerAgeMonthsFromChildId(student);
+  if (ageMonths === null) {
+    return true;
+  }
+  return ageMonths < 18;
 }
 
 function formatDateTime(value) {
@@ -845,6 +939,60 @@ async function loadGeneralLogsFromDataStore() {
   return nextLogs;
 }
 
+async function loadBottleLogsFromDataStore() {
+  try {
+    const firestoreLogs = await readFirestoreHistoryWithRetry(
+      () => fetchBottleLogsFromFirestore(),
+      'Firestore bottle logs read',
+    );
+    if (Array.isArray(firestoreLogs)) {
+      return firestoreLogs;
+    }
+  } catch (error) {
+    console.warn('Firestore bottle logs unavailable, using backend fallback.', error);
+  }
+
+  const fallbackData = await fetchJson(`${API_BASE_URL}/bottles`);
+  const nextLogs = Array.isArray(fallbackData) ? fallbackData : [];
+
+  if (nextLogs.length > 0) {
+    try {
+      await seedBottleLogsToFirestore(nextLogs);
+    } catch (error) {
+      console.warn('Could not seed Firestore bottle logs from backend data.', error);
+    }
+  }
+
+  return nextLogs;
+}
+
+async function loadNappyLogsFromDataStore() {
+  try {
+    const firestoreLogs = await readFirestoreHistoryWithRetry(
+      () => fetchNappyLogsFromFirestore(),
+      'Firestore nappy logs read',
+    );
+    if (Array.isArray(firestoreLogs)) {
+      return firestoreLogs;
+    }
+  } catch (error) {
+    console.warn('Firestore nappy logs unavailable, using backend fallback.', error);
+  }
+
+  const fallbackData = await fetchJson(`${API_BASE_URL}/nappies`);
+  const nextLogs = Array.isArray(fallbackData) ? fallbackData : [];
+
+  if (nextLogs.length > 0) {
+    try {
+      await seedNappyLogsToFirestore(nextLogs);
+    } catch (error) {
+      console.warn('Could not seed Firestore nappy logs from backend data.', error);
+    }
+  }
+
+  return nextLogs;
+}
+
 async function loadAttendanceHistoryForStudentFromDataStore(studentId, options = {}) {
   const normalizedStudentId = String(studentId || '').trim();
   if (!normalizedStudentId) {
@@ -960,6 +1108,42 @@ async function loadGeneralLogsForStudentFromDataStore(studentId) {
   }
 }
 
+async function loadBottleLogsForStudentFromDataStore(studentId) {
+  const normalizedStudentId = String(studentId || '').trim();
+  if (!normalizedStudentId) {
+    return [];
+  }
+
+  try {
+    return await readFirestoreHistoryWithRetry(
+      () => fetchBottleLogsForStudentFromFirestore(normalizedStudentId),
+      'Firestore learner bottle logs read',
+    );
+  } catch (error) {
+    console.warn('Firestore learner bottle logs unavailable, using broader fallback.', error);
+    const logs = await loadBottleLogsFromDataStore();
+    return logs.filter((entry) => String(entry?.studentId || '').trim() === normalizedStudentId);
+  }
+}
+
+async function loadNappyLogsForStudentFromDataStore(studentId) {
+  const normalizedStudentId = String(studentId || '').trim();
+  if (!normalizedStudentId) {
+    return [];
+  }
+
+  try {
+    return await readFirestoreHistoryWithRetry(
+      () => fetchNappyLogsForStudentFromFirestore(normalizedStudentId),
+      'Firestore learner nappy logs read',
+    );
+  } catch (error) {
+    console.warn('Firestore learner nappy logs unavailable, using broader fallback.', error);
+    const logs = await loadNappyLogsFromDataStore();
+    return logs.filter((entry) => String(entry?.studentId || '').trim() === normalizedStudentId);
+  }
+}
+
 async function saveMedicineLogRecord(payload, student = null) {
   try {
     return await saveMedicineLogToFirestore(payload, student);
@@ -996,6 +1180,42 @@ async function saveGeneralLogRecord(payload, student = null) {
   }
 }
 
+async function saveBottleLogRecord(payload, student = null) {
+  try {
+    return await saveBottleLogToFirestore(payload, student);
+  } catch (firestoreError) {
+    console.warn('Firestore bottle log save failed, using backend fallback.', firestoreError);
+
+    const data = await fetchJson(`${API_BASE_URL}/bottles`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
+
+    return data?.entry || payload;
+  }
+}
+
+async function saveNappyLogRecord(payload, student = null) {
+  try {
+    return await saveNappyLogToFirestore(payload, student);
+  } catch (firestoreError) {
+    console.warn('Firestore nappy log save failed, using backend fallback.', firestoreError);
+
+    const data = await fetchJson(`${API_BASE_URL}/nappies`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
+
+    return data?.entry || payload;
+  }
+}
+
 async function updateAttendanceHistoryEntry(entryId, updates = {}) {
   return updateAttendanceEntryInFirestore(entryId, updates);
 }
@@ -1010,6 +1230,14 @@ async function updateMedicineHistoryEntry(entryId, updates = {}) {
 
 async function updateGeneralHistoryEntry(entryId, updates = {}) {
   return updateGeneralLogInFirestore(entryId, updates);
+}
+
+async function updateBottleHistoryEntry(entryId, updates = {}) {
+  return updateBottleLogInFirestore(entryId, updates);
+}
+
+async function updateNappyHistoryEntry(entryId, updates = {}) {
+  return updateNappyLogInFirestore(entryId, updates);
 }
 
 function LoginScreen({ onLogin, isBusy }) {
@@ -1118,6 +1346,94 @@ function LoginScreen({ onLogin, isBusy }) {
 
         {forgotMessage ? <Text style={styles.loginInfoText}>{forgotMessage}</Text> : null}
         {forgotError ? <Text style={styles.loginErrorText}>{forgotError}</Text> : null}
+
+        {errorMessage ? <Text style={styles.errorText}>{errorMessage}</Text> : null}
+      </View>
+    </SafeAreaView>
+  );
+}
+
+function ForcePasswordResetScreen({ email, onSubmit, isBusy }) {
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [errorMessage, setErrorMessage] = useState('');
+
+  const handleSubmit = async () => {
+    const trimmedCurrent = String(currentPassword || '').trim();
+    const trimmedNew = String(newPassword || '').trim();
+    const trimmedConfirm = String(confirmPassword || '').trim();
+
+    if (!trimmedCurrent || !trimmedNew || !trimmedConfirm) {
+      setErrorMessage('Fill in all fields to continue.');
+      return;
+    }
+
+    if (trimmedNew.length < 6) {
+      setErrorMessage('New password must be at least 6 characters.');
+      return;
+    }
+
+    if (trimmedNew !== trimmedConfirm) {
+      setErrorMessage('New password and confirmation do not match.');
+      return;
+    }
+
+    try {
+      setErrorMessage('');
+      await onSubmit({ currentPassword: trimmedCurrent, newPassword: trimmedNew });
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+    } catch (error) {
+      const code = String(error?.code || '').trim();
+      if (code === 'auth/wrong-password' || code === 'auth/invalid-credential') {
+        setErrorMessage('Current password is incorrect. Use the child ID password assigned to this parent account.');
+        return;
+      }
+      setErrorMessage(error?.message || 'Could not update password.');
+    }
+  };
+
+  return (
+    <SafeAreaView style={styles.loginScreenContainer}>
+      <View style={styles.loginCard}>
+        <Text style={styles.loginTitle}>Reset Password</Text>
+        <Text style={styles.loginSubtitle}>For security, you must set a new password before using the app.</Text>
+        <Text style={styles.loginInfoText}>{`Signed in as: ${email || 'Parent account'}`}</Text>
+
+        <TextInput
+          style={styles.formInput}
+          placeholder="Current Password (Child ID)"
+          placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+          value={currentPassword}
+          onChangeText={setCurrentPassword}
+          secureTextEntry
+        />
+        <TextInput
+          style={styles.formInput}
+          placeholder="New Password"
+          placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+          value={newPassword}
+          onChangeText={setNewPassword}
+          secureTextEntry
+        />
+        <TextInput
+          style={styles.formInput}
+          placeholder="Confirm New Password"
+          placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+          value={confirmPassword}
+          onChangeText={setConfirmPassword}
+          secureTextEntry
+        />
+
+        <TouchableOpacity
+          style={[styles.loginButton, isBusy && styles.saveStudentButtonDisabled]}
+          onPress={handleSubmit}
+          disabled={isBusy}
+        >
+          <Text style={styles.saveStudentButtonText}>{isBusy ? 'Saving...' : 'Save New Password'}</Text>
+        </TouchableOpacity>
 
         {errorMessage ? <Text style={styles.errorText}>{errorMessage}</Text> : null}
       </View>
@@ -1374,6 +1690,7 @@ export default function App() {
     role: 'teacher',
     permissions: DEFAULT_ROLE_PERMISSIONS.teacher,
     linkedStudentIds: [],
+    requiresPasswordReset: false,
   });
 
   useEffect(() => {
@@ -1394,6 +1711,7 @@ export default function App() {
         role: 'teacher',
         permissions: DEFAULT_ROLE_PERMISSIONS.teacher,
         linkedStudentIds: [],
+        requiresPasswordReset: false,
       });
       setAuthReady(true);
       setAuthBusy(false);
@@ -1422,6 +1740,24 @@ export default function App() {
     }
   };
 
+  const handleCompleteMandatoryPasswordReset = async ({ currentPassword, newPassword }) => {
+    setAuthBusy(true);
+    try {
+      await updateCurrentUserCredentials({
+        currentPassword,
+        newPassword,
+      });
+      setAccessProfile((prev) => ({
+        ...prev,
+        requiresPasswordReset: false,
+        mustResetPassword: false,
+      }));
+      Alert.alert('Password Updated', 'Your new password has been saved.');
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
   // Auto-logout after 30 minutes of being signed in
   useEffect(() => {
     if (!authUser) return;
@@ -1443,6 +1779,16 @@ export default function App() {
 
   if (!authUser) {
     return <LoginScreen onLogin={handleLogin} isBusy={authBusy} />;
+  }
+
+  if (Boolean(accessProfile?.requiresPasswordReset || accessProfile?.mustResetPassword)) {
+    return (
+      <ForcePasswordResetScreen
+        email={accessProfile?.email || authUser?.email || ''}
+        onSubmit={handleCompleteMandatoryPasswordReset}
+        isBusy={authBusy}
+      />
+    );
   }
 
   const loginIdentity = accessProfile.displayName || authUser.email || 'Staff Member';
@@ -2785,6 +3131,8 @@ function StudentClassFolderScreen({ route, navigation }) {
   const canLogIncidents = hasPermission(accessProfile, 'canLogIncidents');
   const canLogMedicine = hasPermission(accessProfile, 'canLogMedicine');
   const canLogGeneral = hasPermission(accessProfile, 'canLogGeneral');
+  const canLogBottle = canLogGeneral;
+  const canLogNappy = canLogGeneral;
   const [students, setStudents] = useState([]);
   const [attendanceEntries, setAttendanceEntries] = useState([]);
   const [savingAttendanceId, setSavingAttendanceId] = useState('');
@@ -2825,6 +3173,26 @@ function StudentClassFolderScreen({ route, navigation }) {
   const [generalOccurredTime, setGeneralOccurredTime] = useState(getCurrentLocalTimeString());
   const [showGeneralOccurredDatePicker, setShowGeneralOccurredDatePicker] = useState(false);
   const [generalSaving, setGeneralSaving] = useState(false);
+  const [bottleStudent, setBottleStudent] = useState(null);
+  const [bottleAmount, setBottleAmount] = useState('');
+  const [bottleComments, setBottleComments] = useState('');
+  const initialBottleDate = getCurrentLocalDateString();
+  const [bottleOccurredYear, setBottleOccurredYear] = useState(initialBottleDate.split('-')[0]);
+  const [bottleOccurredMonth, setBottleOccurredMonth] = useState(initialBottleDate.split('-')[1]);
+  const [bottleOccurredDay, setBottleOccurredDay] = useState(initialBottleDate.split('-')[2]);
+  const [bottleOccurredTime, setBottleOccurredTime] = useState(getCurrentLocalTimeString());
+  const [showBottleOccurredDatePicker, setShowBottleOccurredDatePicker] = useState(false);
+  const [bottleSaving, setBottleSaving] = useState(false);
+  const [nappyStudent, setNappyStudent] = useState(null);
+  const [nappyType, setNappyType] = useState('Wee');
+  const [nappyComments, setNappyComments] = useState('');
+  const initialNappyDate = getCurrentLocalDateString();
+  const [nappyOccurredYear, setNappyOccurredYear] = useState(initialNappyDate.split('-')[0]);
+  const [nappyOccurredMonth, setNappyOccurredMonth] = useState(initialNappyDate.split('-')[1]);
+  const [nappyOccurredDay, setNappyOccurredDay] = useState(initialNappyDate.split('-')[2]);
+  const [nappyOccurredTime, setNappyOccurredTime] = useState(getCurrentLocalTimeString());
+  const [showNappyOccurredDatePicker, setShowNappyOccurredDatePicker] = useState(false);
+  const [nappySaving, setNappySaving] = useState(false);
 
   const fetchStudents = useCallback(async () => {
     try {
@@ -3042,6 +3410,50 @@ function StudentClassFolderScreen({ route, navigation }) {
     setGeneralOccurredTime(getCurrentLocalTimeString());
   };
 
+  const openBottleModal = (student) => {
+    if (!canLogBottle) {
+      Alert.alert('Access Restricted', 'Your account can view bottle logs but cannot create them.');
+      return;
+    }
+
+    setBottleStudent(student);
+    setBottleAmount('');
+    setBottleComments('');
+    setBottleOccurredYear(getCurrentLocalDateString().split('-')[0]);
+    setBottleOccurredMonth(getCurrentLocalDateString().split('-')[1]);
+    setBottleOccurredDay(getCurrentLocalDateString().split('-')[2]);
+    setBottleOccurredTime(getCurrentLocalTimeString());
+  };
+
+  const closeBottleModal = () => {
+    setBottleStudent(null);
+    setBottleAmount('');
+    setBottleComments('');
+    setShowBottleOccurredDatePicker(false);
+  };
+
+  const openNappyModal = (student) => {
+    if (!canLogNappy) {
+      Alert.alert('Access Restricted', 'Your account can view nappy logs but cannot create them.');
+      return;
+    }
+
+    setNappyStudent(student);
+    setNappyType('Wee');
+    setNappyComments('');
+    setNappyOccurredYear(getCurrentLocalDateString().split('-')[0]);
+    setNappyOccurredMonth(getCurrentLocalDateString().split('-')[1]);
+    setNappyOccurredDay(getCurrentLocalDateString().split('-')[2]);
+    setNappyOccurredTime(getCurrentLocalTimeString());
+  };
+
+  const closeNappyModal = () => {
+    setNappyStudent(null);
+    setNappyType('Wee');
+    setNappyComments('');
+    setShowNappyOccurredDatePicker(false);
+  };
+
   const closeGeneralModal = () => {
     setGeneralStudent(null);
     setGeneralSubject('');
@@ -3074,6 +3486,8 @@ function StudentClassFolderScreen({ route, navigation }) {
   const requestCloseIncidentModal = () => confirmCancelLogModal(closeIncidentModal);
   const requestCloseMedicineModal = () => confirmCancelLogModal(closeMedicineModal);
   const requestCloseGeneralModal = () => confirmCancelLogModal(closeGeneralModal);
+  const requestCloseBottleModal = () => confirmCancelLogModal(closeBottleModal);
+  const requestCloseNappyModal = () => confirmCancelLogModal(closeNappyModal);
 
   const handleSaveMedicine = async () => {
     if (!medicineStudent) {
@@ -3163,6 +3577,88 @@ function StudentClassFolderScreen({ route, navigation }) {
     }
   };
 
+  const handleSaveBottle = async () => {
+    if (!bottleStudent) {
+      showValidationAlert('Missing Details', 'Please select a learner and complete all bottle fields.');
+      return;
+    }
+
+    if (!bottleAmount.trim()) {
+      showValidationAlert('Missing Details', 'Please enter the bottle amount.');
+      return;
+    }
+
+    const bottleOccurredDate = `${bottleOccurredYear}-${bottleOccurredMonth}-${bottleOccurredDay}`;
+    const timeGiven = buildIncidentOccurredAt(bottleOccurredDate, bottleOccurredTime);
+    if (!timeGiven) {
+      Alert.alert('Time Required', 'Enter the bottle time in 24-hour format, for example 14:30.');
+      return;
+    }
+
+    if (new Date(timeGiven).getTime() > Date.now()) {
+      Alert.alert('Date Not Allowed', 'The bottle time cannot be in the future.');
+      return;
+    }
+
+    try {
+      setBottleSaving(true);
+      await saveBottleLogRecord({
+        studentId: String(bottleStudent.id || '').trim(),
+        amount: bottleAmount.trim(),
+        comments: bottleComments.trim(),
+        timeGiven,
+      }, bottleStudent);
+
+      closeBottleModal();
+      Alert.alert('Saved', 'Bottle logged for this learner.');
+    } catch (error) {
+      Alert.alert('Error', error.message || 'Could not save the bottle log.');
+    } finally {
+      setBottleSaving(false);
+    }
+  };
+
+  const handleSaveNappy = async () => {
+    if (!nappyStudent) {
+      showValidationAlert('Missing Details', 'Please select a learner and complete all nappy fields.');
+      return;
+    }
+
+    if (!String(nappyType || '').trim()) {
+      showValidationAlert('Missing Details', 'Please select Wee or Dirty.');
+      return;
+    }
+
+    const nappyOccurredDate = `${nappyOccurredYear}-${nappyOccurredMonth}-${nappyOccurredDay}`;
+    const timeLogged = buildIncidentOccurredAt(nappyOccurredDate, nappyOccurredTime);
+    if (!timeLogged) {
+      Alert.alert('Time Required', 'Enter the nappy time in 24-hour format, for example 14:30.');
+      return;
+    }
+
+    if (new Date(timeLogged).getTime() > Date.now()) {
+      Alert.alert('Date Not Allowed', 'The nappy time cannot be in the future.');
+      return;
+    }
+
+    try {
+      setNappySaving(true);
+      await saveNappyLogRecord({
+        studentId: String(nappyStudent.id || '').trim(),
+        nappyType: nappyType.trim(),
+        comments: nappyComments.trim(),
+        timeLogged,
+      }, nappyStudent);
+
+      closeNappyModal();
+      Alert.alert('Saved', 'Nappy logged for this learner.');
+    } catch (error) {
+      Alert.alert('Error', error.message || 'Could not save the nappy log.');
+    } finally {
+      setNappySaving(false);
+    }
+  };
+
   const activeMedicineAllergyWarning = useMemo(
     () => doesMedicationTriggerAllergy(medicineName, medicineStudent?.allergies || ''),
     [medicineName, medicineStudent],
@@ -3173,7 +3669,7 @@ function StudentClassFolderScreen({ route, navigation }) {
       <ScrollView contentContainerStyle={styles.formContainer}>
         <Text style={styles.title}>{className}</Text>
         <Text style={styles.subtitle}>Students in this class with quick daily logging</Text>
-        <Text style={styles.helperText}>Use each learner card to set attendance status and quickly add incident, medicine, or general communication logs without leaving Students.</Text>
+        <Text style={styles.helperText}>Use each learner card to set attendance status and quickly add bottle, nappy, incident, medicine, or general communication logs without leaving Students.</Text>
 
         <TextInput
           style={styles.searchInput}
@@ -3191,6 +3687,8 @@ function StudentClassFolderScreen({ route, navigation }) {
         {visibleStudents.map((student) => {
           const attendanceEntry = getAttendanceEntryForStudent(student);
           const isSavingThisStudent = savingAttendanceId === String(student.id || '').trim();
+          const showBottle = shouldShowBottle(student);
+          const showNappy = shouldShowNappy(student);
           const isParentMarkedAbsent = attendanceEntry.status === 'Absent' && (
             attendanceEntry.parentReportedAbsent
             || String(attendanceEntry.reason || '').toLowerCase().includes(PARENT_ABSENT_REASON.toLowerCase())
@@ -3227,6 +3725,30 @@ function StudentClassFolderScreen({ route, navigation }) {
                 ))}
               </View>
 
+              {showBottle || showNappy ? (
+                <View style={styles.quickLogRow}>
+                  {showBottle ? (
+                    <TouchableOpacity
+                      style={[styles.quickLogButton, !canLogBottle && styles.saveStudentButtonDisabled]}
+                      onPress={() => openBottleModal(student)}
+                      disabled={!canLogBottle}
+                    >
+                      <Text style={styles.quickLogButtonText}>Bottle</Text>
+                    </TouchableOpacity>
+                  ) : null}
+
+                  {showNappy ? (
+                    <TouchableOpacity
+                      style={[styles.quickLogButton, !canLogNappy && styles.saveStudentButtonDisabled]}
+                      onPress={() => openNappyModal(student)}
+                      disabled={!canLogNappy}
+                    >
+                      <Text style={styles.quickLogButtonText}>Nappy</Text>
+                    </TouchableOpacity>
+                  ) : null}
+                </View>
+              ) : null}
+
               <View style={styles.quickLogRow}>
                 <TouchableOpacity
                   style={[styles.quickLogButton, !canLogIncidents && styles.saveStudentButtonDisabled]}
@@ -3258,6 +3780,165 @@ function StudentClassFolderScreen({ route, navigation }) {
           );
         })}
       </ScrollView>
+
+      <Modal
+        visible={Boolean(bottleStudent)}
+        transparent
+        animationType="fade"
+        onRequestClose={closeBottleModal}
+      >
+        <TouchableWithoutFeedback onPress={closeBottleModal}>
+          <View style={styles.modalBackdrop}>
+            <TouchableWithoutFeedback onPress={() => {}}>
+              <View style={styles.modalCard}>
+                <Text style={styles.modalTitle}>Log Bottle</Text>
+                <Text style={styles.modalText}>{bottleStudent ? getStudentFullName(bottleStudent) : ''}</Text>
+
+                {Platform.OS !== 'web' ? (
+                  <View style={styles.compactDateFieldWrapper}>
+                    <Text style={styles.compactDateLabel}>When It Was Given</Text>
+                    <TouchableOpacity style={styles.compactDateField} onPress={() => setShowBottleOccurredDatePicker(true)}>
+                      <Text style={styles.compactDateFieldText}>{formatCompactDateDisplay(bottleOccurredYear, bottleOccurredMonth, bottleOccurredDay)}</Text>
+                    </TouchableOpacity>
+                  </View>
+                ) : null}
+                <TextInput
+                  style={styles.formInput}
+                  placeholder="Time given (HH:MM)"
+                  placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+                  value={bottleOccurredTime}
+                  onChangeText={setBottleOccurredTime}
+                />
+                <TextInput
+                  style={styles.formInput}
+                  placeholder="Amount"
+                  placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+                  value={bottleAmount}
+                  onChangeText={setBottleAmount}
+                />
+                <TextInput
+                  style={[styles.formInput, styles.reasonInput]}
+                  placeholder="Comments"
+                  placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+                  value={bottleComments}
+                  onChangeText={setBottleComments}
+                  multiline
+                />
+
+                <View style={[styles.modalButtonsRow, styles.modalButtonsRowSeparated]}>
+                  <TouchableOpacity style={styles.modalButtonSecondary} onPress={requestCloseBottleModal}>
+                    <Text style={styles.modalButtonSecondaryText}>Cancel</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.modalButtonPrimary, bottleSaving && styles.saveStudentButtonDisabled]}
+                    onPress={handleSaveBottle}
+                    disabled={bottleSaving}
+                  >
+                    <Text style={styles.modalButtonPrimaryText}>{bottleSaving ? 'Saving...' : 'Save'}</Text>
+                  </TouchableOpacity>
+                </View>
+
+                <CompactDatePickerModal
+                  visible={showBottleOccurredDatePicker}
+                  onClose={() => setShowBottleOccurredDatePicker(false)}
+                  onDateSelect={(y, m, d) => {
+                    setBottleOccurredYear(y);
+                    setBottleOccurredMonth(m);
+                    setBottleOccurredDay(d);
+                  }}
+                  currentYear={bottleOccurredYear}
+                  currentMonth={bottleOccurredMonth}
+                  currentDay={bottleOccurredDay}
+                />
+              </View>
+            </TouchableWithoutFeedback>
+          </View>
+        </TouchableWithoutFeedback>
+      </Modal>
+
+      <Modal
+        visible={Boolean(nappyStudent)}
+        transparent
+        animationType="fade"
+        onRequestClose={closeNappyModal}
+      >
+        <TouchableWithoutFeedback onPress={closeNappyModal}>
+          <View style={styles.modalBackdrop}>
+            <TouchableWithoutFeedback onPress={() => {}}>
+              <View style={styles.modalCard}>
+                <Text style={styles.modalTitle}>Log Nappy</Text>
+                <Text style={styles.modalText}>{nappyStudent ? getStudentFullName(nappyStudent) : ''}</Text>
+
+                <Text style={styles.formSectionLabel}>Type</Text>
+                <View style={styles.actionRow}>
+                  {['Wee', 'Dirty'].map((value) => (
+                    <TouchableOpacity
+                      key={value}
+                      style={[
+                        styles.statusActionButton,
+                        nappyType === value && styles.statusActionButtonSelected,
+                      ]}
+                      onPress={() => setNappyType(value)}
+                    >
+                      <Text style={[styles.statusActionButtonText, nappyType === value && styles.selectedActionText]}>{value}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+
+                {Platform.OS !== 'web' ? (
+                  <View style={styles.compactDateFieldWrapper}>
+                    <Text style={styles.compactDateLabel}>When It Was Logged</Text>
+                    <TouchableOpacity style={styles.compactDateField} onPress={() => setShowNappyOccurredDatePicker(true)}>
+                      <Text style={styles.compactDateFieldText}>{formatCompactDateDisplay(nappyOccurredYear, nappyOccurredMonth, nappyOccurredDay)}</Text>
+                    </TouchableOpacity>
+                  </View>
+                ) : null}
+                <TextInput
+                  style={styles.formInput}
+                  placeholder="Time logged (HH:MM)"
+                  placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+                  value={nappyOccurredTime}
+                  onChangeText={setNappyOccurredTime}
+                />
+                <TextInput
+                  style={[styles.formInput, styles.reasonInput]}
+                  placeholder="Comments"
+                  placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+                  value={nappyComments}
+                  onChangeText={setNappyComments}
+                  multiline
+                />
+
+                <View style={[styles.modalButtonsRow, styles.modalButtonsRowSeparated]}>
+                  <TouchableOpacity style={styles.modalButtonSecondary} onPress={requestCloseNappyModal}>
+                    <Text style={styles.modalButtonSecondaryText}>Cancel</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.modalButtonPrimary, nappySaving && styles.saveStudentButtonDisabled]}
+                    onPress={handleSaveNappy}
+                    disabled={nappySaving}
+                  >
+                    <Text style={styles.modalButtonPrimaryText}>{nappySaving ? 'Saving...' : 'Save'}</Text>
+                  </TouchableOpacity>
+                </View>
+
+                <CompactDatePickerModal
+                  visible={showNappyOccurredDatePicker}
+                  onClose={() => setShowNappyOccurredDatePicker(false)}
+                  onDateSelect={(y, m, d) => {
+                    setNappyOccurredYear(y);
+                    setNappyOccurredMonth(m);
+                    setNappyOccurredDay(d);
+                  }}
+                  currentYear={nappyOccurredYear}
+                  currentMonth={nappyOccurredMonth}
+                  currentDay={nappyOccurredDay}
+                />
+              </View>
+            </TouchableWithoutFeedback>
+          </View>
+        </TouchableWithoutFeedback>
+      </Modal>
 
       <Modal
         visible={Boolean(incidentStudent)}
@@ -3529,6 +4210,7 @@ function EmergencyProfileScreen({ route, navigation }) {
   const { student } = route.params;
   const [isMedicalAidVisible, setIsMedicalAidVisible] = useState(false);
   const [isPinModalVisible, setIsPinModalVisible] = useState(false);
+  const [pinModalPurpose, setPinModalPurpose] = useState('vault');
   const [pinInput, setPinInput] = useState('');
   const [pinError, setPinError] = useState('');
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -3542,6 +4224,8 @@ function EmergencyProfileScreen({ route, navigation }) {
   const [incidentHistory, setIncidentHistory] = useState([]);
   const [medicineHistory, setMedicineHistory] = useState([]);
   const [generalHistory, setGeneralHistory] = useState([]);
+  const [bottleHistory, setBottleHistory] = useState([]);
+  const [nappyHistory, setNappyHistory] = useState([]);
   const [activeHistoryModal, setActiveHistoryModal] = useState('');
   const [historyModalToRestore, setHistoryModalToRestore] = useState('');
   const [isEditAuthModalVisible, setIsEditAuthModalVisible] = useState(false);
@@ -3564,6 +4248,13 @@ function EmergencyProfileScreen({ route, navigation }) {
   const [editStaffMember, setEditStaffMember] = useState('');
   const [editSubject, setEditSubject] = useState('');
   const [editNote, setEditNote] = useState('');
+  const [editBottleAmount, setEditBottleAmount] = useState('');
+  const [editBottleComments, setEditBottleComments] = useState('');
+  const [editNappyType, setEditNappyType] = useState('Wee');
+  const [editNappyComments, setEditNappyComments] = useState('');
+  const showBottle = shouldShowBottle(student);
+  const showNappy = shouldShowNappy(student);
+  const canEditLearnerHistory = !isParentAccount;
   const emergencyContacts = Array.isArray(student.emergencyContacts) ? student.emergencyContacts : [];
   const allergies = String(student.allergies || '').trim().toLowerCase();
   const hasCriticalAllergy = allergies && allergies !== 'none' && allergies !== 'no known allergies';
@@ -3644,6 +4335,24 @@ function EmergencyProfileScreen({ route, navigation }) {
       </tr>
     `).join('');
 
+    const bottleRows = bottleHistory.map((entry) => `
+      <tr>
+        <td>${escapeHtml(formatDateTime(entry.timeGiven || entry.createdAt))}</td>
+        <td>${escapeHtml(formatDateTime(entry.createdAt || entry.timeGiven))}</td>
+        <td>${escapeHtml(entry.amount || 'Not recorded')}</td>
+        <td>${escapeHtml(entry.comments || 'Not recorded')}</td>
+      </tr>
+    `).join('');
+
+    const nappyRows = nappyHistory.map((entry) => `
+      <tr>
+        <td>${escapeHtml(formatDateTime(entry.timeLogged || entry.createdAt))}</td>
+        <td>${escapeHtml(formatDateTime(entry.createdAt || entry.timeLogged))}</td>
+        <td>${escapeHtml(entry.nappyType || 'Not recorded')}</td>
+        <td>${escapeHtml(entry.comments || 'Not recorded')}</td>
+      </tr>
+    `).join('');
+
     const html = `
       <html>
         <head>
@@ -3675,6 +4384,12 @@ function EmergencyProfileScreen({ route, navigation }) {
 
           <h2>General Communication History</h2>
           ${generalRows ? `<table><thead><tr><th>Happened</th><th>Logged</th><th>Subject</th><th>Note</th><th>Staff Member</th></tr></thead><tbody>${generalRows}</tbody></table>` : '<p>No records found.</p>'}
+
+          <h2>Bottle History</h2>
+          ${bottleRows ? `<table><thead><tr><th>Given</th><th>Logged</th><th>Amount</th><th>Comments</th></tr></thead><tbody>${bottleRows}</tbody></table>` : '<p>No records found.</p>'}
+
+          <h2>Nappy History</h2>
+          ${nappyRows ? `<table><thead><tr><th>Logged</th><th>Created</th><th>Type</th><th>Comments</th></tr></thead><tbody>${nappyRows}</tbody></table>` : '<p>No records found.</p>'}
         </body>
       </html>
     `;
@@ -3701,7 +4416,7 @@ function EmergencyProfileScreen({ route, navigation }) {
     } catch (error) {
       Alert.alert('Export Failed', error.message || 'Could not export learner history.');
     }
-  }, [attendanceHistory, incidentHistory, medicineHistory, generalHistory, student]);
+  }, [attendanceHistory, incidentHistory, medicineHistory, generalHistory, bottleHistory, nappyHistory, student]);
 
   const handleDial = async (phoneNumber) => {
     if (!phoneNumber) {
@@ -3721,6 +4436,7 @@ function EmergencyProfileScreen({ route, navigation }) {
 
   const handleToggleMedicalAid = () => {
     if (!isMedicalAidVisible) {
+      setPinModalPurpose('vault');
       setIsPinModalVisible(true);
       return;
     }
@@ -3728,22 +4444,71 @@ function EmergencyProfileScreen({ route, navigation }) {
     setIsMedicalAidVisible((current) => !current);
   };
 
-  const handleVerifyPin = () => {
-    const expectedPin = String(schoolMedicalVaultPassword || student.medicalPin || '1234').trim();
-    if (pinInput !== expectedPin) {
-      setPinError('Incorrect password. Please try again.');
+  const handleProtectedMedicalInfoEdit = () => {
+    if (canEditStudents) {
+      navigation.navigate('StudentForm', { mode: 'edit', student });
       return;
     }
 
-    setIsMedicalAidVisible(true);
-    setPinInput('');
-    setPinError('');
-    setIsPinModalVisible(false);
+    if (isParentAccount) {
+      setPinModalPurpose('medical-info');
+      setPinInput('');
+      setPinError('');
+      setIsPinModalVisible(true);
+      return;
+    }
+
+    navigation.navigate('StudentForm', { mode: 'parent-edit', student });
+  };
+
+  const handleVerifyPin = async () => {
+    try {
+      if (isParentAccount) {
+        const expectedPin = String(student?.childId || '').trim();
+        if (!expectedPin) {
+          setPinError('No child ID is saved for this learner.');
+          return;
+        }
+        if (String(pinInput || '').trim() !== expectedPin) {
+          setPinError('Incorrect child ID. Please try again.');
+          return;
+        }
+      } else {
+        const expectedPin = String(schoolMedicalVaultPassword || student.medicalPin || '1234').trim();
+        if (String(pinInput || '').trim() !== expectedPin) {
+          setPinError('Incorrect password. Please try again.');
+          return;
+        }
+      }
+
+      if (pinModalPurpose === 'medical-info') {
+        setPinInput('');
+        setPinError('');
+        setIsPinModalVisible(false);
+        setPinModalPurpose('vault');
+        navigation.navigate('StudentForm', { mode: 'parent-edit', student });
+        return;
+      }
+
+      setIsMedicalAidVisible(true);
+      setPinInput('');
+      setPinError('');
+      setIsPinModalVisible(false);
+      setPinModalPurpose('vault');
+    } catch (error) {
+      const code = String(error?.code || '').trim();
+      if (code === 'auth/wrong-password' || code === 'auth/invalid-credential') {
+        setPinError('Incorrect password. Please try again.');
+        return;
+      }
+      setPinError(error?.message || 'Could not verify password.');
+    }
   };
 
   const handleCancelPin = () => {
     setPinInput('');
     setPinError('');
+    setPinModalPurpose('vault');
     setIsPinModalVisible(false);
   };
 
@@ -3804,17 +4569,21 @@ function EmergencyProfileScreen({ route, navigation }) {
     setHistoryLoadError(null);
     try {
       const normalizedStudentId = String(student.id || '').trim();
-      const [attendanceData, incidentData, medicineData, generalData] = await Promise.all([
+      const [attendanceData, incidentData, medicineData, generalData, bottleData, nappyData] = await Promise.all([
         loadAttendanceHistoryForStudentFromDataStore(normalizedStudentId),
         loadIncidentsForStudentFromDataStore(normalizedStudentId),
         loadMedicineLogsForStudentFromDataStore(normalizedStudentId),
         loadGeneralLogsForStudentFromDataStore(normalizedStudentId),
+        loadBottleLogsForStudentFromDataStore(normalizedStudentId),
+        loadNappyLogsForStudentFromDataStore(normalizedStudentId),
       ]);
 
       const scopedAttendance = isParentAccount ? filterRecordsByAccess(attendanceData, accessProfile) : attendanceData;
       const scopedIncidents = isParentAccount ? filterRecordsByAccess(incidentData, accessProfile) : incidentData;
       const scopedMedicine = isParentAccount ? filterRecordsByAccess(medicineData, accessProfile) : medicineData;
       const scopedGeneral = isParentAccount ? filterRecordsByAccess(generalData, accessProfile) : generalData;
+      const scopedBottle = isParentAccount ? filterRecordsByAccess(bottleData, accessProfile) : bottleData;
+      const scopedNappy = isParentAccount ? filterRecordsByAccess(nappyData, accessProfile) : nappyData;
 
       const filteredAttendance = scopedAttendance.filter((entry) => {
         const entryStatus = String(entry.status || '').trim();
@@ -3823,18 +4592,24 @@ function EmergencyProfileScreen({ route, navigation }) {
       const filteredIncidents = scopedIncidents.filter((entry) => String(entry.studentId || '').trim() === normalizedStudentId);
       const filteredMedicine = scopedMedicine.filter((entry) => String(entry.studentId || '').trim() === normalizedStudentId);
       const filteredGeneral = scopedGeneral.filter((entry) => String(entry.studentId || '').trim() === normalizedStudentId);
+      const filteredBottle = scopedBottle.filter((entry) => String(entry.studentId || '').trim() === normalizedStudentId);
+      const filteredNappy = scopedNappy.filter((entry) => String(entry.studentId || '').trim() === normalizedStudentId);
 
       await Promise.all([
         saveHistoryToCache(normalizedStudentId, 'attendance', filteredAttendance),
         saveHistoryToCache(normalizedStudentId, 'incidents', filteredIncidents),
         saveHistoryToCache(normalizedStudentId, 'medicine', filteredMedicine),
         saveHistoryToCache(normalizedStudentId, 'general', filteredGeneral),
+        saveHistoryToCache(normalizedStudentId, 'bottle', filteredBottle),
+        saveHistoryToCache(normalizedStudentId, 'nappy', filteredNappy),
       ]);
 
       setAttendanceHistory(filteredAttendance);
       setIncidentHistory(filteredIncidents);
       setMedicineHistory(filteredMedicine);
       setGeneralHistory(filteredGeneral);
+      setBottleHistory(filteredBottle);
+      setNappyHistory(filteredNappy);
       setHistoryLoadError(null);
     } catch (error) {
       console.warn('Could not refresh history.', error);
@@ -3999,17 +4774,21 @@ function EmergencyProfileScreen({ route, navigation }) {
             return;
           }
 
-          const [attendanceData, incidentData, medicineData, generalData] = await Promise.all([
+          const [attendanceData, incidentData, medicineData, generalData, bottleData, nappyData] = await Promise.all([
             loadAttendanceHistoryForStudentFromDataStore(learnerId),
             loadIncidentsForStudentFromDataStore(learnerId),
             loadMedicineLogsForStudentFromDataStore(learnerId),
             loadGeneralLogsForStudentFromDataStore(learnerId),
+            loadBottleLogsForStudentFromDataStore(learnerId),
+            loadNappyLogsForStudentFromDataStore(learnerId),
           ]);
 
           const scopedAttendance = isParentAccount ? filterRecordsByAccess(attendanceData, accessProfile) : attendanceData;
           const scopedIncidents = isParentAccount ? filterRecordsByAccess(incidentData, accessProfile) : incidentData;
           const scopedMedicine = isParentAccount ? filterRecordsByAccess(medicineData, accessProfile) : medicineData;
           const scopedGeneral = isParentAccount ? filterRecordsByAccess(generalData, accessProfile) : generalData;
+          const scopedBottle = isParentAccount ? filterRecordsByAccess(bottleData, accessProfile) : bottleData;
+          const scopedNappy = isParentAccount ? filterRecordsByAccess(nappyData, accessProfile) : nappyData;
 
           const filteredAttendance = scopedAttendance.filter((historyEntry) => {
             const status = String(historyEntry?.status || '').trim();
@@ -4018,12 +4797,16 @@ function EmergencyProfileScreen({ route, navigation }) {
           const filteredIncidents = scopedIncidents.filter((historyEntry) => String(historyEntry?.studentId || '').trim() === learnerId);
           const filteredMedicine = scopedMedicine.filter((historyEntry) => String(historyEntry?.studentId || '').trim() === learnerId);
           const filteredGeneral = scopedGeneral.filter((historyEntry) => String(historyEntry?.studentId || '').trim() === learnerId);
+          const filteredBottle = scopedBottle.filter((historyEntry) => String(historyEntry?.studentId || '').trim() === learnerId);
+          const filteredNappy = scopedNappy.filter((historyEntry) => String(historyEntry?.studentId || '').trim() === learnerId);
 
           await Promise.all([
             saveHistoryToCache(learnerId, 'attendance', filteredAttendance),
             saveHistoryToCache(learnerId, 'incidents', filteredIncidents),
             saveHistoryToCache(learnerId, 'medicine', filteredMedicine),
             saveHistoryToCache(learnerId, 'general', filteredGeneral),
+            saveHistoryToCache(learnerId, 'bottle', filteredBottle),
+            saveHistoryToCache(learnerId, 'nappy', filteredNappy),
           ]);
         }));
       } catch (error) {
@@ -4037,6 +4820,8 @@ function EmergencyProfileScreen({ route, navigation }) {
         setIncidentHistory([]);
         setMedicineHistory([]);
         setGeneralHistory([]);
+        setBottleHistory([]);
+        setNappyHistory([]);
         if (!isRefresh) setHistoryLoading(false);
         if (isRefresh) setHistoryRefreshing(false);
         return;
@@ -4050,11 +4835,13 @@ function EmergencyProfileScreen({ route, navigation }) {
         const normalizedStudentId = String(student.id || '').trim();
 
         // Load from cache first (optimistic)
-        const [cachedAttendance, cachedIncidents, cachedMedicine, cachedGeneral] = await Promise.all([
+        const [cachedAttendance, cachedIncidents, cachedMedicine, cachedGeneral, cachedBottle, cachedNappy] = await Promise.all([
           loadHistoryFromCache(normalizedStudentId, 'attendance'),
           loadHistoryFromCache(normalizedStudentId, 'incidents'),
           loadHistoryFromCache(normalizedStudentId, 'medicine'),
           loadHistoryFromCache(normalizedStudentId, 'general'),
+          loadHistoryFromCache(normalizedStudentId, 'bottle'),
+          loadHistoryFromCache(normalizedStudentId, 'nappy'),
         ]);
 
         if (isActive) {
@@ -4062,14 +4849,18 @@ function EmergencyProfileScreen({ route, navigation }) {
           setIncidentHistory(cachedIncidents);
           setMedicineHistory(cachedMedicine);
           setGeneralHistory(cachedGeneral);
+          setBottleHistory(cachedBottle);
+          setNappyHistory(cachedNappy);
         }
 
         // Fetch fresh data in background
-        const [attendanceData, incidentData, medicineData, generalData] = await Promise.all([
+        const [attendanceData, incidentData, medicineData, generalData, bottleData, nappyData] = await Promise.all([
           loadAttendanceHistoryForStudentFromDataStore(normalizedStudentId),
           loadIncidentsForStudentFromDataStore(normalizedStudentId),
           loadMedicineLogsForStudentFromDataStore(normalizedStudentId),
           loadGeneralLogsForStudentFromDataStore(normalizedStudentId),
+          loadBottleLogsForStudentFromDataStore(normalizedStudentId),
+          loadNappyLogsForStudentFromDataStore(normalizedStudentId),
         ]);
 
         if (!isActive) return;
@@ -4078,6 +4869,8 @@ function EmergencyProfileScreen({ route, navigation }) {
         const scopedIncidents = isParentAccount ? filterRecordsByAccess(incidentData, accessProfile) : incidentData;
         const scopedMedicine = isParentAccount ? filterRecordsByAccess(medicineData, accessProfile) : medicineData;
         const scopedGeneral = isParentAccount ? filterRecordsByAccess(generalData, accessProfile) : generalData;
+        const scopedBottle = isParentAccount ? filterRecordsByAccess(bottleData, accessProfile) : bottleData;
+        const scopedNappy = isParentAccount ? filterRecordsByAccess(nappyData, accessProfile) : nappyData;
 
         const filteredAttendance = scopedAttendance.filter((entry) => {
           const entryStatus = String(entry.status || '').trim();
@@ -4086,6 +4879,8 @@ function EmergencyProfileScreen({ route, navigation }) {
         const filteredIncidents = scopedIncidents.filter((entry) => String(entry.studentId || '').trim() === normalizedStudentId);
         const filteredMedicine = scopedMedicine.filter((entry) => String(entry.studentId || '').trim() === normalizedStudentId);
         const filteredGeneral = scopedGeneral.filter((entry) => String(entry.studentId || '').trim() === normalizedStudentId);
+        const filteredBottle = scopedBottle.filter((entry) => String(entry.studentId || '').trim() === normalizedStudentId);
+        const filteredNappy = scopedNappy.filter((entry) => String(entry.studentId || '').trim() === normalizedStudentId);
 
         // Cache the fresh data
         await Promise.all([
@@ -4093,6 +4888,8 @@ function EmergencyProfileScreen({ route, navigation }) {
           saveHistoryToCache(normalizedStudentId, 'incidents', filteredIncidents),
           saveHistoryToCache(normalizedStudentId, 'medicine', filteredMedicine),
           saveHistoryToCache(normalizedStudentId, 'general', filteredGeneral),
+          saveHistoryToCache(normalizedStudentId, 'bottle', filteredBottle),
+          saveHistoryToCache(normalizedStudentId, 'nappy', filteredNappy),
         ]);
 
         // Update UI with fresh data
@@ -4101,6 +4898,8 @@ function EmergencyProfileScreen({ route, navigation }) {
           setIncidentHistory(filteredIncidents);
           setMedicineHistory(filteredMedicine);
           setGeneralHistory(filteredGeneral);
+          setBottleHistory(filteredBottle);
+          setNappyHistory(filteredNappy);
           setHistoryLoadError(null);
         }
 
@@ -4172,6 +4971,10 @@ function EmergencyProfileScreen({ route, navigation }) {
     setEditStaffMember('');
     setEditSubject('');
     setEditNote('');
+    setEditBottleAmount('');
+    setEditBottleComments('');
+    setEditNappyType('Wee');
+    setEditNappyComments('');
     if (modalKeyToRestore) {
       setActiveHistoryModal(modalKeyToRestore);
       setHistoryModalToRestore('');
@@ -4206,12 +5009,23 @@ function EmergencyProfileScreen({ route, navigation }) {
       setEditSubject(String(entry?.subject || '').trim());
       setEditNote(String(entry?.note || '').trim());
       setEditStaffMember(String(entry?.staffMember || '').trim());
+    } else if (entryType === 'bottle') {
+      setEditBottleAmount(String(entry?.amount || '').trim());
+      setEditBottleComments(String(entry?.comments || '').trim());
+    } else if (entryType === 'nappy') {
+      const normalizedType = String(entry?.nappyType || 'Wee').trim();
+      setEditNappyType(normalizedType === 'Dirty' ? 'Dirty' : 'Wee');
+      setEditNappyComments(String(entry?.comments || '').trim());
     }
 
     setIsEditEntryModalVisible(true);
   };
 
   const handleRequestEntryEdit = (entryType, entry) => {
+    if (!canEditLearnerHistory) {
+      return;
+    }
+
     const expectedPassword = String(schoolEditDataPassword || '').trim();
     if (!expectedPassword) {
       Alert.alert('Set Password First', 'Principal/admin must set Learner History Edit Password in Profile & Settings before edits are allowed.');
@@ -4325,6 +5139,36 @@ function EmergencyProfileScreen({ route, navigation }) {
         setGeneralHistory((current) => current.map((item) => (item.id === updatedEntry.id ? updatedEntry : item)));
       }
 
+      if (pendingEditType === 'bottle') {
+        const timeGiven = buildIncidentOccurredAt(editDate, editTime);
+        if (!timeGiven) {
+          Alert.alert('Invalid Time', 'Enter a valid date and time in 24-hour format (HH:MM).');
+          return;
+        }
+
+        const updatedEntry = await updateBottleHistoryEntry(entryBeingEdited.id, {
+          amount: String(editBottleAmount || '').trim(),
+          comments: String(editBottleComments || '').trim(),
+          timeGiven,
+        });
+        setBottleHistory((current) => current.map((item) => (item.id === updatedEntry.id ? updatedEntry : item)));
+      }
+
+      if (pendingEditType === 'nappy') {
+        const timeLogged = buildIncidentOccurredAt(editDate, editTime);
+        if (!timeLogged) {
+          Alert.alert('Invalid Time', 'Enter a valid date and time in 24-hour format (HH:MM).');
+          return;
+        }
+
+        const updatedEntry = await updateNappyHistoryEntry(entryBeingEdited.id, {
+          nappyType: String(editNappyType || 'Wee').trim(),
+          comments: String(editNappyComments || '').trim(),
+          timeLogged,
+        });
+        setNappyHistory((current) => current.map((item) => (item.id === updatedEntry.id ? updatedEntry : item)));
+      }
+
       closeEditEntryModal();
       Alert.alert('Updated', 'Entry updated successfully.');
     } catch (error) {
@@ -4342,7 +5186,7 @@ function EmergencyProfileScreen({ route, navigation }) {
         {canUpdateMedicalInfo ? (
           <TouchableOpacity
             style={styles.editStudentButton}
-            onPress={() => navigation.navigate('StudentForm', { mode: canEditStudents ? 'edit' : 'parent-edit', student })}
+            onPress={handleProtectedMedicalInfoEdit}
           >
             <Text style={styles.editStudentButtonText}>{canEditStudents ? 'Edit Student' : 'Update Medical Info'}</Text>
           </TouchableOpacity>
@@ -4385,64 +5229,6 @@ function EmergencyProfileScreen({ route, navigation }) {
           <Text style={styles.allergyText}>{student.allergies || 'None reported'}</Text>
         </View>
 
-        {isParentAccount ? (
-          <View style={styles.card}>
-            <Text style={styles.sectionTitle}>Attendance Notice</Text>
-            <Text style={styles.infoText}>Attendance notices are only open for today and lock automatically at 12:00 AM.</Text>
-            <View style={styles.compactDateFieldWrapper}>
-              <Text style={styles.compactDateLabel}>Absent Date</Text>
-              <TouchableOpacity
-                style={styles.compactDateField}
-                onPress={() => setShowParentAbsentDatePicker(true)}
-              >
-                <Text style={styles.compactDateFieldText}>{formatCompactDateDisplay(parentAbsentYear, parentAbsentMonth, parentAbsentDay)}</Text>
-              </TouchableOpacity>
-            </View>
-            <TouchableOpacity
-              style={[styles.editStudentButton, (hasParentMarkedAbsentForDate || parentAbsentDate !== getCurrentLocalDateString()) && styles.moduleCardDisabled]}
-              onPress={handleParentReportAbsentForDate}
-              disabled={parentAbsentSaving || hasParentMarkedAbsentForDate || parentAbsentDate !== getCurrentLocalDateString()}
-            >
-              <Text style={styles.editStudentButtonText}>
-                {parentAbsentSaving
-                  ? 'Saving absence...'
-                  : hasParentMarkedAbsentForDate
-                    ? 'Absent for selected date submitted'
-                    : parentAbsentDate !== getCurrentLocalDateString()
-                      ? 'Only today can be submitted'
-                      : 'Child Will Be Absent'}
-              </Text>
-            </TouchableOpacity>
-            {parentAbsentDate !== getCurrentLocalDateString() ? (
-              <Text style={styles.tapHint}>Past and future attendance dates are locked for parent updates.</Text>
-            ) : null}
-            {hasParentMarkedAbsentForDate ? (
-              <>
-                <Text style={styles.tapHint}>Staff can now see this for {parentAbsentDate} under attendance.</Text>
-                <TouchableOpacity
-                  style={styles.undoAbsentButton}
-                  onPress={handleParentUndoAbsentForDate}
-                  disabled={parentAbsentSaving || parentAbsentDate !== getCurrentLocalDateString()}
-                >
-                  <Text style={styles.undoAbsentButtonText}>{parentAbsentSaving ? 'Updating...' : 'Undo Absent for Selected Date'}</Text>
-                </TouchableOpacity>
-              </>
-            ) : null}
-            <CompactDatePickerModal
-              visible={showParentAbsentDatePicker}
-              onClose={() => setShowParentAbsentDatePicker(false)}
-              onDateSelect={(y, m, d) => {
-                setParentAbsentYear(y);
-                setParentAbsentMonth(m);
-                setParentAbsentDay(d);
-              }}
-              currentYear={parentAbsentYear}
-              currentMonth={parentAbsentMonth}
-              currentDay={parentAbsentDay}
-            />
-          </View>
-        ) : null}
-
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>Medical Aid Vault</Text>
           <Text style={styles.vaultText}>
@@ -4479,6 +5265,12 @@ function EmergencyProfileScreen({ route, navigation }) {
           <Text style={styles.infoText}>{"Open a category to view that learner's detailed history without scrolling through every record on this page."}</Text>
           {[
             { key: 'attendance', label: `Attendance (${attendanceHistory.length})` },
+            ...(showNappy ? [
+              { key: 'nappy', label: `Nappy (${nappyHistory.length})` },
+            ] : []),
+            ...(showBottle ? [
+              { key: 'bottle', label: `Bottle (${bottleHistory.length})` },
+            ] : []),
             { key: 'incidents', label: `Incident (${incidentHistory.length})` },
             { key: 'medicine', label: `Medicine (${medicineHistory.length})` },
             { key: 'general', label: `General Communication (${generalHistory.length})` },
@@ -4513,12 +5305,66 @@ function EmergencyProfileScreen({ route, navigation }) {
             <View key={entry.id} style={styles.timelineCard}>
               <View style={styles.timelineCardHeader}>
                 <Text style={styles.studentName}>{entry.status}</Text>
-                <TouchableOpacity style={styles.timelineEditButton} onPress={() => handleRequestEntryEdit('attendance', entry)}>
-                  <Text style={styles.timelineEditButtonText}>Edit</Text>
-                </TouchableOpacity>
+                {canEditLearnerHistory ? (
+                  <TouchableOpacity style={styles.timelineEditButton} onPress={() => handleRequestEntryEdit('attendance', entry)}>
+                    <Text style={styles.timelineEditButtonText}>Edit</Text>
+                  </TouchableOpacity>
+                ) : null}
               </View>
               <Text style={styles.timelineMeta}>{entry.date || formatDateTime(entry.createdAt)} • {entry.className || getClassroomName(student)}</Text>
               {entry.reason ? <Text style={styles.timelineText}>Reason: {entry.reason}</Text> : null}
+            </View>
+          )) : null}
+        </LearnerHistoryModal>
+
+        <LearnerHistoryModal
+          visible={showNappy && activeHistoryModal === 'nappy'}
+          title="Nappy History"
+          emptyText="No nappy entries yet."
+          loading={historyLoading}
+          refreshing={historyRefreshing}
+          hasError={historyLoadError}
+          onClose={() => setActiveHistoryModal('')}
+          onRefresh={handleRefreshHistory}
+        >
+          {!historyLoading && nappyHistory.length > 0 ? nappyHistory.map((entry) => (
+            <View key={entry.id} style={styles.timelineCard}>
+              <View style={styles.timelineCardHeader}>
+                <Text style={styles.studentName}>{entry.nappyType || 'Nappy'}</Text>
+                {canEditLearnerHistory ? (
+                  <TouchableOpacity style={styles.timelineEditButton} onPress={() => handleRequestEntryEdit('nappy', entry)}>
+                    <Text style={styles.timelineEditButtonText}>Edit</Text>
+                  </TouchableOpacity>
+                ) : null}
+              </View>
+              <Text style={styles.timelineMeta}>Logged: {formatDateTime(entry.timeLogged || entry.createdAt)}</Text>
+              <Text style={styles.timelineText}>Comments: {entry.comments || 'None'}</Text>
+            </View>
+          )) : null}
+        </LearnerHistoryModal>
+
+        <LearnerHistoryModal
+          visible={showBottle && activeHistoryModal === 'bottle'}
+          title="Bottle History"
+          emptyText="No bottle entries yet."
+          loading={historyLoading}
+          refreshing={historyRefreshing}
+          hasError={historyLoadError}
+          onClose={() => setActiveHistoryModal('')}
+          onRefresh={handleRefreshHistory}
+        >
+          {!historyLoading && bottleHistory.length > 0 ? bottleHistory.map((entry) => (
+            <View key={entry.id} style={styles.timelineCard}>
+              <View style={styles.timelineCardHeader}>
+                <Text style={styles.studentName}>{entry.amount || 'Bottle'}</Text>
+                {canEditLearnerHistory ? (
+                  <TouchableOpacity style={styles.timelineEditButton} onPress={() => handleRequestEntryEdit('bottle', entry)}>
+                    <Text style={styles.timelineEditButtonText}>Edit</Text>
+                  </TouchableOpacity>
+                ) : null}
+              </View>
+              <Text style={styles.timelineMeta}>Given: {formatDateTime(entry.timeGiven || entry.createdAt)}</Text>
+              <Text style={styles.timelineText}>Comments: {entry.comments || 'None'}</Text>
             </View>
           )) : null}
         </LearnerHistoryModal>
@@ -4537,9 +5383,11 @@ function EmergencyProfileScreen({ route, navigation }) {
             <View key={entry.id} style={styles.timelineCard}>
               <View style={styles.timelineCardHeader}>
                 <Text style={styles.studentName}>{entry.location || 'Incident'}</Text>
-                <TouchableOpacity style={styles.timelineEditButton} onPress={() => handleRequestEntryEdit('incidents', entry)}>
-                  <Text style={styles.timelineEditButtonText}>Edit</Text>
-                </TouchableOpacity>
+                {canEditLearnerHistory ? (
+                  <TouchableOpacity style={styles.timelineEditButton} onPress={() => handleRequestEntryEdit('incidents', entry)}>
+                    <Text style={styles.timelineEditButtonText}>Edit</Text>
+                  </TouchableOpacity>
+                ) : null}
               </View>
               <Text style={styles.timelineMeta}>Happened: {formatDateTime(entry.occurredAt || entry.timestamp)}</Text>
               <Text style={styles.tapHint}>Logged: {formatDateTime(entry.createdAt || entry.timestamp)}</Text>
@@ -4563,9 +5411,11 @@ function EmergencyProfileScreen({ route, navigation }) {
             <View key={entry.id} style={styles.timelineCard}>
               <View style={styles.timelineCardHeader}>
                 <Text style={styles.studentName}>{entry.medicationName || 'Medication'}</Text>
-                <TouchableOpacity style={styles.timelineEditButton} onPress={() => handleRequestEntryEdit('medicine', entry)}>
-                  <Text style={styles.timelineEditButtonText}>Edit</Text>
-                </TouchableOpacity>
+                {canEditLearnerHistory ? (
+                  <TouchableOpacity style={styles.timelineEditButton} onPress={() => handleRequestEntryEdit('medicine', entry)}>
+                    <Text style={styles.timelineEditButtonText}>Edit</Text>
+                  </TouchableOpacity>
+                ) : null}
               </View>
               <Text style={styles.timelineMeta}>Given: {formatDateTime(entry.timeAdministered)}</Text>
               <Text style={styles.tapHint}>Logged: {formatDateTime(entry.createdAt || entry.timeAdministered)}</Text>
@@ -4589,9 +5439,11 @@ function EmergencyProfileScreen({ route, navigation }) {
             <View key={entry.id} style={styles.timelineCard}>
               <View style={styles.timelineCardHeader}>
                 <Text style={styles.studentName}>{entry.subject || 'General communication'}</Text>
-                <TouchableOpacity style={styles.timelineEditButton} onPress={() => handleRequestEntryEdit('general', entry)}>
-                  <Text style={styles.timelineEditButtonText}>Edit</Text>
-                </TouchableOpacity>
+                {canEditLearnerHistory ? (
+                  <TouchableOpacity style={styles.timelineEditButton} onPress={() => handleRequestEntryEdit('general', entry)}>
+                    <Text style={styles.timelineEditButtonText}>Edit</Text>
+                  </TouchableOpacity>
+                ) : null}
               </View>
               <Text style={styles.timelineMeta}>Happened: {formatDateTime(entry.occurredAt || entry.timestamp)}</Text>
               <Text style={styles.tapHint}>Logged: {formatDateTime(entry.createdAt || entry.timestamp)}</Text>
@@ -4780,6 +5632,84 @@ function EmergencyProfileScreen({ route, navigation }) {
                   </>
                 ) : null}
 
+                {pendingEditType === 'bottle' ? (
+                  <>
+                    <TextInput
+                      style={styles.formInput}
+                      placeholder="Date given (YYYY-MM-DD)"
+                      placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+                      value={editDate}
+                      onChangeText={setEditDate}
+                      autoCapitalize="none"
+                    />
+                    <TextInput
+                      style={styles.formInput}
+                      placeholder="Time given (HH:MM)"
+                      placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+                      value={editTime}
+                      onChangeText={setEditTime}
+                    />
+                    <TextInput
+                      style={styles.formInput}
+                      placeholder="Amount"
+                      placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+                      value={editBottleAmount}
+                      onChangeText={setEditBottleAmount}
+                    />
+                    <TextInput
+                      style={[styles.formInput, styles.reasonInput]}
+                      placeholder="Comments"
+                      placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+                      value={editBottleComments}
+                      onChangeText={setEditBottleComments}
+                      multiline
+                    />
+                  </>
+                ) : null}
+
+                {pendingEditType === 'nappy' ? (
+                  <>
+                    <Text style={styles.formSectionLabel}>Type</Text>
+                    <View style={styles.actionRow}>
+                      {['Wee', 'Dirty'].map((value) => (
+                        <TouchableOpacity
+                          key={value}
+                          style={[
+                            styles.statusActionButton,
+                            editNappyType === value && styles.statusActionButtonSelected,
+                          ]}
+                          onPress={() => setEditNappyType(value)}
+                        >
+                          <Text style={[styles.statusActionButtonText, editNappyType === value && styles.selectedActionText]}>{value}</Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                    <TextInput
+                      style={styles.formInput}
+                      placeholder="Date logged (YYYY-MM-DD)"
+                      placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+                      value={editDate}
+                      onChangeText={setEditDate}
+                      autoCapitalize="none"
+                    />
+                    <TextInput
+                      style={styles.formInput}
+                      placeholder="Time logged (HH:MM)"
+                      placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+                      value={editTime}
+                      onChangeText={setEditTime}
+                    />
+                    <TextInput
+                      style={[styles.formInput, styles.reasonInput]}
+                      placeholder="Comments"
+                      placeholderTextColor={FORM_PLACEHOLDER_COLOR}
+                      value={editNappyComments}
+                      onChangeText={setEditNappyComments}
+                      multiline
+                    />
+                  </>
+                ) : null}
+
                 {pendingEditType === 'general' ? (
                   <>
                     <TextInput
@@ -4848,7 +5778,13 @@ function EmergencyProfileScreen({ route, navigation }) {
           <View style={styles.modalBackdrop}>
             <View style={styles.modalCard}>
               <Text style={styles.modalTitle}>Enter Password</Text>
-              <Text style={styles.modalText}>Enter your Medical Aid Vault password to view medical aid details.</Text>
+              <Text style={styles.modalText}>
+                {isParentAccount
+                  ? pinModalPurpose === 'medical-info'
+                    ? 'Enter this learner\'s child ID to update medical information.'
+                    : 'Enter this learner\'s child ID to view medical aid details.'
+                  : 'Enter your Medical Aid Vault password to view medical aid details.'}
+              </Text>
 
               <TextInput
                 style={styles.pinInput}
@@ -4857,7 +5793,7 @@ function EmergencyProfileScreen({ route, navigation }) {
                   setPinInput(text);
                   setPinError('');
                 }}
-                placeholder="Vault password"
+                placeholder={isParentAccount ? 'Child ID' : 'Vault password'}
                 secureTextEntry
                 autoCapitalize="none"
               />

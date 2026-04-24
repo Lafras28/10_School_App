@@ -33,6 +33,8 @@ const ATTENDANCE_COLLECTION = 'attendance';
 const INCIDENTS_COLLECTION = 'incidents';
 const MEDICINE_LOGS_COLLECTION = 'medicine_logs';
 const GENERAL_LOGS_COLLECTION = 'general_logs';
+const BOTTLE_LOGS_COLLECTION = 'bottle_logs';
+const NAPPY_LOGS_COLLECTION = 'nappy_logs';
 const COMPLIANCE_DOCS_COLLECTION = 'compliance_documents';
 const ACTIVITIES_COLLECTION = 'activities';
 const PRINCIPAL_EMAILS = new Set(['fritzlafras@gmail.com', 'principal@school.com']);
@@ -207,6 +209,7 @@ function buildAccessProfile(user, data = {}) {
     linkedStudentIds: Array.isArray(data?.linkedStudentIds)
       ? data.linkedStudentIds.map((value) => String(value || '').trim()).filter(Boolean)
       : [],
+    requiresPasswordReset: Boolean(data?.requiresPasswordReset || data?.mustResetPassword),
   };
 }
 
@@ -370,6 +373,27 @@ export function signOutCurrentUser() {
   return signOut(auth);
 }
 
+export async function verifyCurrentUserPassword(password = '') {
+  const user = auth.currentUser;
+  if (!user) {
+    throw new Error('You need to be signed in to verify password.');
+  }
+
+  const normalizedPassword = String(password || '').trim();
+  if (!normalizedPassword) {
+    throw new Error('Enter your password.');
+  }
+
+  const email = String(user.email || '').trim();
+  if (!email) {
+    throw new Error('No email is available for this account.');
+  }
+
+  const credential = EmailAuthProvider.credential(email, normalizedPassword);
+  await reauthenticateWithCredential(user, credential);
+  return true;
+}
+
 export async function sendResetPasswordEmail(email) {
   const normalizedEmail = String(email || '').trim().toLowerCase();
   if (!normalizedEmail) {
@@ -413,6 +437,11 @@ export async function updateCurrentUserCredentials({ currentPassword = '', newEm
       throw new Error('Password must be at least 6 characters long.');
     }
     await updatePassword(user, normalizedNewPassword);
+    await setDoc(doc(db, USERS_COLLECTION, user.uid), {
+      mustResetPassword: false,
+      requiresPasswordReset: false,
+      updatedAt: new Date().toISOString(),
+    }, { merge: true });
   }
 
   return {
@@ -598,6 +627,40 @@ function normalizeGeneralLog(record = {}, fallbackId = '') {
     staffMember: String(record?.staffMember || '').trim(),
     occurredAt,
     timestamp: String(record?.timestamp || createdAt).trim(),
+    createdAt,
+  };
+}
+
+function normalizeBottleLog(record = {}, fallbackId = '') {
+  const createdAt = String(record?.createdAt || record?.timeGiven || new Date().toISOString()).trim();
+  const timeGiven = String(record?.timeGiven || record?.occurredAt || createdAt).trim();
+
+  return {
+    schoolId: normalizeSchoolId(record?.schoolId || activeSchoolId),
+    id: String(record?.id || fallbackId || createRecordId('bot')).trim(),
+    studentId: String(record?.studentId || '').trim(),
+    studentName: String(record?.studentName || '').trim(),
+    amount: String(record?.amount || '').trim(),
+    comments: String(record?.comments || record?.note || '').trim(),
+    timeGiven,
+    createdAt,
+  };
+}
+
+function normalizeNappyLog(record = {}, fallbackId = '') {
+  const createdAt = String(record?.createdAt || record?.timeLogged || new Date().toISOString()).trim();
+  const timeLogged = String(record?.timeLogged || record?.occurredAt || createdAt).trim();
+  const rawType = String(record?.nappyType || record?.type || 'Wee').trim().toLowerCase();
+  const nappyType = rawType === 'dirty' ? 'Dirty' : 'Wee';
+
+  return {
+    schoolId: normalizeSchoolId(record?.schoolId || activeSchoolId),
+    id: String(record?.id || fallbackId || createRecordId('nap')).trim(),
+    studentId: String(record?.studentId || '').trim(),
+    studentName: String(record?.studentName || '').trim(),
+    nappyType,
+    comments: String(record?.comments || record?.note || '').trim(),
+    timeLogged,
     createdAt,
   };
 }
@@ -796,6 +859,52 @@ export async function fetchGeneralLogsForStudentFromFirestore(studentId) {
     .sort(compareNewestFirst);
 }
 
+export async function fetchBottleLogsFromFirestore() {
+  const snapshot = await getDocs(schoolCollectionRef(activeSchoolId, BOTTLE_LOGS_COLLECTION));
+  return snapshot.docs
+    .map((documentSnapshot) => normalizeBottleLog(documentSnapshot.data() || {}, documentSnapshot.id))
+    .sort(compareNewestFirst);
+}
+
+export async function fetchBottleLogsForStudentFromFirestore(studentId) {
+  const normalizedStudentId = String(studentId || '').trim();
+  if (!normalizedStudentId) {
+    return [];
+  }
+
+  const bottleQuery = query(
+    schoolCollectionRef(activeSchoolId, BOTTLE_LOGS_COLLECTION),
+    where('studentId', '==', normalizedStudentId),
+  );
+  const snapshot = await getDocs(bottleQuery);
+  return snapshot.docs
+    .map((documentSnapshot) => normalizeBottleLog(documentSnapshot.data() || {}, documentSnapshot.id))
+    .sort(compareNewestFirst);
+}
+
+export async function fetchNappyLogsFromFirestore() {
+  const snapshot = await getDocs(schoolCollectionRef(activeSchoolId, NAPPY_LOGS_COLLECTION));
+  return snapshot.docs
+    .map((documentSnapshot) => normalizeNappyLog(documentSnapshot.data() || {}, documentSnapshot.id))
+    .sort(compareNewestFirst);
+}
+
+export async function fetchNappyLogsForStudentFromFirestore(studentId) {
+  const normalizedStudentId = String(studentId || '').trim();
+  if (!normalizedStudentId) {
+    return [];
+  }
+
+  const nappyQuery = query(
+    schoolCollectionRef(activeSchoolId, NAPPY_LOGS_COLLECTION),
+    where('studentId', '==', normalizedStudentId),
+  );
+  const snapshot = await getDocs(nappyQuery);
+  return snapshot.docs
+    .map((documentSnapshot) => normalizeNappyLog(documentSnapshot.data() || {}, documentSnapshot.id))
+    .sort(compareNewestFirst);
+}
+
 async function getNextStudentId() {
   const students = await fetchStudentsFromFirestore();
   let highest = 0;
@@ -915,6 +1024,42 @@ export async function saveGeneralLogToFirestore(payload = {}, student = null) {
   return normalized;
 }
 
+export async function saveBottleLogToFirestore(payload = {}, student = null) {
+  const studentName = student
+    ? `${String(student?.firstName || '').trim()} ${String(student?.lastName || '').trim()}`.trim()
+    : String(payload?.studentName || '').trim();
+  const createdAt = new Date().toISOString();
+  const timeGiven = String(payload?.timeGiven || createdAt).trim();
+  const normalized = normalizeBottleLog({
+    ...payload,
+    id: createRecordId('bot'),
+    studentName,
+    timeGiven,
+    createdAt,
+  });
+
+  await setDoc(schoolDocRef(activeSchoolId, BOTTLE_LOGS_COLLECTION, normalized.id), normalized, { merge: true });
+  return normalized;
+}
+
+export async function saveNappyLogToFirestore(payload = {}, student = null) {
+  const studentName = student
+    ? `${String(student?.firstName || '').trim()} ${String(student?.lastName || '').trim()}`.trim()
+    : String(payload?.studentName || '').trim();
+  const createdAt = new Date().toISOString();
+  const timeLogged = String(payload?.timeLogged || createdAt).trim();
+  const normalized = normalizeNappyLog({
+    ...payload,
+    id: createRecordId('nap'),
+    studentName,
+    timeLogged,
+    createdAt,
+  });
+
+  await setDoc(schoolDocRef(activeSchoolId, NAPPY_LOGS_COLLECTION, normalized.id), normalized, { merge: true });
+  return normalized;
+}
+
 export async function seedStudentsToFirestore(students = []) {
   if (!Array.isArray(students) || students.length === 0) {
     return 0;
@@ -1030,6 +1175,56 @@ export async function seedGeneralLogsToFirestore(records = []) {
     }
 
     batch.set(schoolDocRef(activeSchoolId, GENERAL_LOGS_COLLECTION, normalized.id), normalized, { merge: true });
+    count += 1;
+  });
+
+  if (count > 0) {
+    await batch.commit();
+  }
+
+  return count;
+}
+
+export async function seedBottleLogsToFirestore(records = []) {
+  if (!Array.isArray(records) || records.length === 0) {
+    return 0;
+  }
+
+  const batch = writeBatch(db);
+  let count = 0;
+
+  records.forEach((record) => {
+    const normalized = normalizeBottleLog(record);
+    if (!normalized.id) {
+      return;
+    }
+
+    batch.set(schoolDocRef(activeSchoolId, BOTTLE_LOGS_COLLECTION, normalized.id), normalized, { merge: true });
+    count += 1;
+  });
+
+  if (count > 0) {
+    await batch.commit();
+  }
+
+  return count;
+}
+
+export async function seedNappyLogsToFirestore(records = []) {
+  if (!Array.isArray(records) || records.length === 0) {
+    return 0;
+  }
+
+  const batch = writeBatch(db);
+  let count = 0;
+
+  records.forEach((record) => {
+    const normalized = normalizeNappyLog(record);
+    if (!normalized.id) {
+      return;
+    }
+
+    batch.set(schoolDocRef(activeSchoolId, NAPPY_LOGS_COLLECTION, normalized.id), normalized, { merge: true });
     count += 1;
   });
 
@@ -1314,6 +1509,54 @@ export async function updateGeneralLogInFirestore(logId, updates = {}) {
   }, normalizedId);
 
   await setDoc(generalRef, merged, { merge: true });
+  return merged;
+}
+
+export async function updateBottleLogInFirestore(logId, updates = {}) {
+  const normalizedId = String(logId || '').trim();
+  if (!normalizedId) {
+    throw new Error('Bottle log id is required to update.');
+  }
+
+  const bottleRef = schoolDocRef(activeSchoolId, BOTTLE_LOGS_COLLECTION, normalizedId);
+  const snapshot = await getDoc(bottleRef);
+  if (!snapshot.exists()) {
+    throw new Error('Bottle log entry not found.');
+  }
+
+  const existing = snapshot.data() || {};
+  const merged = normalizeBottleLog({
+    ...existing,
+    ...(updates && typeof updates === 'object' ? updates : {}),
+    id: normalizedId,
+    createdAt: String(existing?.createdAt || existing?.timeGiven || new Date().toISOString()).trim(),
+  }, normalizedId);
+
+  await setDoc(bottleRef, merged, { merge: true });
+  return merged;
+}
+
+export async function updateNappyLogInFirestore(logId, updates = {}) {
+  const normalizedId = String(logId || '').trim();
+  if (!normalizedId) {
+    throw new Error('Nappy log id is required to update.');
+  }
+
+  const nappyRef = schoolDocRef(activeSchoolId, NAPPY_LOGS_COLLECTION, normalizedId);
+  const snapshot = await getDoc(nappyRef);
+  if (!snapshot.exists()) {
+    throw new Error('Nappy log entry not found.');
+  }
+
+  const existing = snapshot.data() || {};
+  const merged = normalizeNappyLog({
+    ...existing,
+    ...(updates && typeof updates === 'object' ? updates : {}),
+    id: normalizedId,
+    createdAt: String(existing?.createdAt || existing?.timeLogged || new Date().toISOString()).trim(),
+  }, normalizedId);
+
+  await setDoc(nappyRef, merged, { merge: true });
   return merged;
 }
 
